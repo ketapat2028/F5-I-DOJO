@@ -1,0 +1,94 @@
+.f1-carbon-bg {
+  background-color: #0a0a0a;
+  background-image:
+    repeating-linear-gradient(45deg, #151515 0, #151515 2px, #0a0a0a 2px, #0a0a0a 8px),
+    repeating-linear-gradient(-45deg, #151515 0, #151515 2px, #0a0a0a 2px, #0a0a0a 8px);
+}
+
+.f1-font-display {
+  font-family: "Oswald", "Noto Sans Thai", sans-serif;
+}
+
+.f1-font-mono {
+  font-family: "JetBrains Mono", monospace;
+}
+
+@keyframes f1-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.f1-timer-blink {
+  animation: f1-blink 0.8s step-start infinite;
+}
+
+@keyframes f1-bounce-correct {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.08); }
+  60% { transform: scale(0.97); }
+  100% { transform: scale(1); }
+}
+.f1-correct-bounce {
+  animation: f1-bounce-correct 0.4s ease;
+}
+
+@keyframes f1-checkered-flash {
+  0% { opacity: 0; }
+  20% { opacity: 0.9; }
+  100% { opacity: 0; }
+}
+.f1-checkered-flash {
+  animation: f1-checkered-flash 0.6s ease-out forwards;
+  background-image: repeating-conic-gradient(#fff 0% 25%, #111 0% 50%);
+  background-size: 16px 16px;
+}
+
+@keyframes f1-redflag-flash {
+  0% { opacity: 0; }
+  25% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+.f1-redflag-flash {
+  animation: f1-redflag-flash 0.6s ease-out forwards;
+  background-color: #dc0000;
+}
+
+@keyframes f1-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
+}
+.f1-shake {
+  animation: f1-shake 0.4s;
+}
+
+@keyframes f1-speedlines {
+  0% { background-position: 0 0; }
+  100% { background-position: -200px 0; }
+}
+.f1-dragging {
+  background-image: repeating-linear-gradient(90deg, rgba(220,0,0,0.6) 0 2px, transparent 2px 14px);
+  animation: f1-speedlines 0.3s linear infinite;
+}
+
+@keyframes f1-pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px 2px rgba(220, 0, 0, 0.6); transform: scale(1); }
+  50% { box-shadow: 0 0 24px 8px rgba(220, 0, 0, 0.95); transform: scale(1.05); }
+}
+.f1-glow {
+  animation: f1-pulse-glow 1.2s ease-in-out infinite;
+}
+
+@keyframes f1-confetti-fall {
+  0% { transform: translateY(-10vh) rotate(0deg); }
+  100% { transform: translateY(110vh) rotate(720deg); }
+}
+.f1-confetti-piece {
+  position: absolute;
+  top: 0;
+  width: 8px;
+  height: 14px;
+  animation-name: f1-confetti-fall;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
