@@ -14,10 +14,25 @@ BigInt.prototype.toJSON = function () {
 };
 
 // ========== MIDDLEWARE ==========
+// เปิดตรง port 5000 (ไม่มี Apache) frontend จะเรียก /I-DOJO/api/... — ตัด /I-DOJO ออกแบบเดียวกับ Apache/vite proxy
+app.use((req, res, next) => {
+  if (req.url.startsWith('/I-DOJO/api/')) req.url = req.url.slice('/I-DOJO'.length);
+  next();
+});
 app.use(cors());
-app.use(express.json());
-app.use('/uploads', express.static('uploads'));
-app.use('/I-DOJO/uploads', express.static('uploads'));
+// ชุดคำถามเก่า/ที่ import มาอาจยังมีรูปเป็น base64 ฝังอยู่ จึงเผื่อขนาดไว้
+app.use(express.json({ limit: '10mb' }));
+// อยู่ใต้ /api/ เพื่อให้ Apache บน Pi proxy มาถึง (/I-DOJO/api/uploads/<file>)
+app.use('/api/uploads', express.static('uploads'));
+
+// งานที่แก้ข้อมูล (บันทึกชุดคำถาม, อัปโหลดรูป, ลบ records) ต้องส่ง header x-admin-secret ตรงกับ ADMIN_SECRET
+function requireAdmin(req, res, next) {
+  const secret = req.headers['x-admin-secret'];
+  if (!process.env.ADMIN_SECRET || !secret || secret !== process.env.ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
 
 // ========== Multer config ==========
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
@@ -41,6 +56,7 @@ const upload = multer({
 });
 
 // ========== STATIC FILE SERVING + SPA FALLBACK ==========
+// ใช้ตอนรันโดยไม่มี Apache (เปิดตรง port 5000) — บน Pi ส่วนนี้ Apache เสิร์ฟจาก backend/build เอง
 const BUILD_PATH = path.join(__dirname, 'build');
 if (fs.existsSync(BUILD_PATH)) {
   app.use('/I-DOJO', express.static(BUILD_PATH));
@@ -95,7 +111,15 @@ async function initDB() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )
   `);
-  console.log('DB ready — records & app_config tables ensured');
+  // ชุดคำถามของเกม (มีชุดเดียว) — data = { name, timeLimitSeconds, pairs: [SpecRecord] }
+  await query(`
+    CREATE TABLE IF NOT EXISTS game (
+      singleton  TINYINT UNSIGNED NOT NULL DEFAULT 1 PRIMARY KEY,
+      data       MEDIUMTEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+  console.log('DB ready — records, app_config & game tables ensured');
 }
 
 // ========== API ROUTES ==========
@@ -128,11 +152,7 @@ app.post('/api/records', async (req, res) => {
   }
 });
 
-app.delete('/api/records', async (req, res) => {
-  const secret = req.headers['x-admin-secret'];
-  if (!secret || secret !== process.env.ADMIN_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.delete('/api/records', requireAdmin, async (req, res) => {
   try {
     await query('DELETE FROM records');
     res.json({ ok: true });
@@ -142,9 +162,48 @@ app.delete('/api/records', async (req, res) => {
   }
 });
 
-app.post('/api/upload', upload.single('image'), (req, res) => {
+app.post('/api/upload', requireAdmin, upload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no file' });
   res.json({ filename: req.file.filename });
+});
+
+// ให้หน้า editor ตรวจรหัสผู้ดูแลก่อนเริ่มแก้
+app.get('/api/admin/check', requireAdmin, (req, res) => {
+  res.json({ ok: true });
+});
+
+app.get('/api/game', async (req, res) => {
+  try {
+    const rows = await query('SELECT data FROM game WHERE singleton = 1');
+    if (rows.length === 0) return res.status(404).json({ error: 'no game' });
+    res.json(JSON.parse(rows[0].data));
+  } catch (err) {
+    console.error('GET /api/game error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.put('/api/game', requireAdmin, async (req, res) => {
+  const { name, timeLimitSeconds, pairs } = req.body || {};
+  if (!Array.isArray(pairs) || pairs.length < 2) {
+    return res.status(400).json({ error: 'ต้องมีอย่างน้อย 2 คู่' });
+  }
+  try {
+    const json = JSON.stringify({
+      name: typeof name === 'string' ? name : '',
+      timeLimitSeconds: Number.isFinite(timeLimitSeconds) ? Math.max(0, timeLimitSeconds) : 0,
+      pairs,
+    });
+    await query(
+      `INSERT INTO game (singleton, data) VALUES (1, ?)
+       ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = NOW()`,
+      [json]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('PUT /api/game error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 app.get('/api/app-config', async (req, res) => {

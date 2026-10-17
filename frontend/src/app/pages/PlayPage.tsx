@@ -5,7 +5,8 @@ import { VideoPlayer } from "../components/VideoPlayer";
 import { Button } from "../components/ui/button";
 import { cn } from "../components/ui/utils";
 import type { MatchPair, PromptType, Theme } from "../types/theme";
-import { getGame } from "../utils/gameStore";
+import { getGame, NoGameError } from "../utils/gameStore";
+import { forwardKeys, isEmbedded, listenPortal, sendResult, type PortalAck, type PortalResult } from "../utils/portalBridge";
 
 type Phase = "idle" | "running" | "finished" | "timeout";
 type Chip = { id: string; text: string; letter: string; type: PromptType; image?: string };
@@ -36,6 +37,11 @@ type ModalData = {
   wrong: WrongItem[];
 };
 type VideoView = { pairIds: string[]; index: number };
+type PortalStatus = "idle" | "sending" | "sent" | "error";
+type PortalReport = { result: PortalResult; score: number };
+
+// portal ไม่ตอบ ack ภายในเวลานี้ = ถือว่ายังไม่ได้บันทึก (PORTAL_INTEGRATION.md ข้อ 2)
+const ACK_TIMEOUT_MS = 10_000;
 
 const DRAG_THRESHOLD = 6;
 const TYPE_BADGE: Record<PromptType, string> = { text: "TEXT", image: "IMAGE", mixed: "MIXED" };
@@ -96,14 +102,50 @@ export function PlayPage() {
   const [videoView, setVideoView] = useState<VideoView | null>(null);
   const [showHelp, setShowHelp] = useState(false);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [portalStatus, setPortalStatus] = useState<PortalStatus>("idle");
+  const [portalMsg, setPortalMsg] = useState<string | null>(null);
+
   const dragRef = useRef<DragInfo | null>(null);
   const justDraggedRef = useRef(false);
+  const embedded = isEmbedded();
+  // ผลที่ส่งแล้วกำลังรอ ack (กันส่งซ้ำ) และผลล่าสุดไว้กด "ส่งใหม่"
+  const pendingRef = useRef<PortalReport | null>(null);
+  const lastReportRef = useRef<PortalReport | null>(null);
+  const ackTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    getGame().then((g) => {
-      setGame(g);
-      setChips(makeChips(g.pairs));
-    });
+    setLoadError(null);
+    getGame()
+      .then((g) => {
+        setGame(g);
+        setChips(makeChips(g.pairs));
+      })
+      .catch((e) => {
+        setLoadError(
+          e instanceof NoGameError
+            ? "ยังไม่มีชุดคำถาม — ให้ผู้ดูแลตั้งค่าที่หน้า /I-DOJO/editor"
+            : `โหลดชุดคำถามไม่ได้${e instanceof Error ? ` (${e.message})` : ""}`,
+        );
+      });
+  }, [loadAttempt]);
+
+  useEffect(() => {
+    function handleAck(ack: PortalAck) {
+      if (!pendingRef.current) return;
+      if (ackTimerRef.current) window.clearTimeout(ackTimerRef.current);
+      pendingRef.current = null;
+      setPortalStatus(ack.ok ? "sent" : "error");
+      setPortalMsg(ack.ok ? null : (ack.message ?? "จอบันทึกผลไม่สำเร็จ"));
+    }
+    const stopListen = listenPortal(handleAck);
+    const stopKeys = forwardKeys();
+    return () => {
+      stopListen();
+      stopKeys();
+      if (ackTimerRef.current) window.clearTimeout(ackTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -124,7 +166,14 @@ export function PlayPage() {
     return (
       <div className="f1-paper-bg min-h-screen">
         <F1Header />
-        <main className="mx-auto max-w-3xl p-6 text-f1-red">กำลังโหลด...</main>
+        <main className="f1-font-display mx-auto max-w-3xl space-y-3 p-6 text-f1-red">
+          <p>{loadError ?? "กำลังโหลด..."}</p>
+          {loadError && (
+            <Button className="bg-[#DC0000] text-white hover:bg-[#b00000]" onClick={() => setLoadAttempt((n) => n + 1)}>
+              ลองใหม่
+            </Button>
+          )}
+        </main>
       </div>
     );
   }
@@ -142,8 +191,32 @@ export function PlayPage() {
     setPhase((p) => (p === "idle" ? "running" : p));
   }
 
+  // ส่งผลขึ้นจอ Station เฉพาะตอนถูกฝัง · ระหว่างรอ ack ห้ามส่งซ้ำ
+  function report(next: PortalReport) {
+    if (!embedded || pendingRef.current) return;
+    pendingRef.current = next;
+    lastReportRef.current = next;
+    setPortalStatus("sending");
+    setPortalMsg(null);
+    sendResult(next.result, next.score);
+    ackTimerRef.current = window.setTimeout(() => {
+      pendingRef.current = null;
+      setPortalStatus("error");
+      setPortalMsg("ยังไม่ได้รับการยืนยันจากจอ");
+    }, ACK_TIMEOUT_MS);
+  }
+
+  function resendReport() {
+    if (lastReportRef.current) report(lastReportRef.current);
+  }
+
   function resetAll() {
     if (!game) return;
+    // ผลที่ยังรอ ack อยู่ปล่อยให้รอต่อ ส่วนสถานะอื่นเริ่มใหม่
+    if (!pendingRef.current) {
+      setPortalStatus("idle");
+      setPortalMsg(null);
+    }
     setChips(makeChips(game.pairs));
     setSlots({});
     setSelectedId(null);
@@ -216,8 +289,15 @@ export function PlayPage() {
       timeUsedSeconds: elapsed,
       wrong,
     });
-    if (allCorrect) setPhase("finished");
-    else if (isAuto) setPhase("timeout");
+    // ผิดแต่เวลายังเหลือ = ไม่ส่งผล ให้แก้ต่อจนถูกครบหรือหมดเวลา
+    const pct = Math.round((100 * newLocked.size) / game.pairs.length);
+    if (allCorrect) {
+      setPhase("finished");
+      report({ result: "pass", score: pct });
+    } else if (isAuto) {
+      setPhase("timeout");
+      report({ result: "fail", score: pct });
+    }
   }
 
   function retryWrongOnly() {
@@ -465,7 +545,13 @@ export function PlayPage() {
   );
 
   return (
-    <div className="f1-paper-bg min-h-screen pb-16 fit:flex fit:h-dvh fit:flex-col fit:overflow-y-auto fit:pb-0">
+    // ตอนถูกฝัง portal วางปุ่ม "ผ่านสถานี" ทับขอบล่าง ~90px จึงเว้นที่ไว้
+    <div
+      className={cn(
+        "f1-paper-bg min-h-screen fit:flex fit:h-dvh fit:flex-col fit:overflow-y-auto fit:pb-0",
+        embedded ? "pb-28" : "pb-16",
+      )}
+    >
       <F1Header />
       <main className="flex w-full flex-col gap-4 px-6 py-6 lg:px-12 fit:min-h-0 fit:flex-1 fit:gap-2 fit:px-8 fit:py-2">
         <div className="flex flex-col gap-4 fit:flex-row fit:items-center fit:gap-4">
@@ -650,7 +736,7 @@ export function PlayPage() {
         <div className="f1-font-display space-y-1 pt-4 text-xs text-f1-mute fit:flex fit:justify-between fit:gap-6 fit:space-y-0 fit:overflow-hidden fit:whitespace-nowrap fit:pt-0 fit:text-[10px]">
           <p>
             * ซ้าย = คำถามคงที่ • ขวา = คำตอบ • คลิกเลือกจากคลังล่างแล้วคลิกช่องที่จะวาง • หากผิด
-            ระบบจะแนะนำวิดีโอสอนเฉพาะข้อที่ผิด • No API • Local Only • 5min Timer
+            ระบบจะแนะนำวิดีโอสอนเฉพาะข้อที่ผิด
           </p>
           <p>I-DOJO F1 RACING RED • LEFT QUESTION • RIGHT ANSWER • FERRARI RED #DC0000 • GREEN #22C55E</p>
         </div>
@@ -682,7 +768,12 @@ export function PlayPage() {
       {modalData?.allCorrect && <Confetti />}
 
       {modalData && tier && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/60 p-4">
+        <div
+          className={cn(
+            "fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/60 p-4",
+            embedded && "pb-28",
+          )}
+        >
           <div className="f1-font-display relative my-auto w-full max-w-lg rounded-sm border-4 border-[#DC0000] bg-white p-6 text-f1-ink">
             <button
               type="button"
@@ -700,6 +791,28 @@ export function PlayPage() {
               {tier.title}
             </p>
             {tier.sub && <p className="mt-1 text-center text-sm text-f1-red">{tier.sub}</p>}
+
+            {embedded && portalStatus !== "idle" && (
+              <div
+                className={cn(
+                  "mt-3 flex flex-wrap items-center justify-center gap-2 rounded-sm px-3 py-2 text-center text-sm",
+                  portalStatus === "sending" && "bg-black/60 text-[#FFD60A]",
+                  portalStatus === "sent" && "bg-green-950/60 text-green-300",
+                  portalStatus === "error" && "bg-red-950/60 text-red-300",
+                )}
+              >
+                {portalStatus === "sending" && "📡 กำลังส่งผลไปที่จอ…"}
+                {portalStatus === "sent" && "✓ ส่งผลไปที่จอแล้ว"}
+                {portalStatus === "error" && (
+                  <>
+                    <span>ส่งผลไม่สำเร็จ: {portalMsg}</span>
+                    <Button size="sm" className="bg-[#DC0000] text-white hover:bg-[#b00000]" onClick={resendReport}>
+                      ส่งใหม่
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
 
             <div className="f1-font-mono mt-4 grid grid-cols-3 gap-2 text-center text-sm">
               <div className="rounded-sm bg-zinc-100 p-2">

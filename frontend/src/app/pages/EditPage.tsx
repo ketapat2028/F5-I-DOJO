@@ -5,17 +5,46 @@ import { VideoPlayer } from "../components/VideoPlayer";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import type { MatchPair, PromptType, Theme } from "../types/theme";
-import { fileToImageDataUrl } from "../utils/image";
+import { fileToUploadableImage } from "../utils/image";
 import {
   exportGameJson,
   getGame,
   isPairComplete,
+  makeDemoGame,
   makeEmptyPair,
+  NoGameError,
   parseImportedPairs,
+  readLegacyLocalGame,
   saveGame,
+  UnauthorizedError,
+  uploadImage,
+  verifyAdmin,
 } from "../utils/gameStore";
 
 const MIN_PAIRS = 2;
+// รหัสผู้ดูแลเก็บไว้แค่ใน tab นี้ ปิด tab แล้วต้องใส่ใหม่
+const SECRET_KEY = "idojo.adminSecret";
+
+function readSecret(): string {
+  try {
+    return sessionStorage.getItem(SECRET_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeSecret(value: string) {
+  try {
+    if (value) sessionStorage.setItem(SECRET_KEY, value);
+    else sessionStorage.removeItem(SECRET_KEY);
+  } catch {
+    // ไม่มี sessionStorage ก็ใช้แค่ใน state
+  }
+}
+
+function errorText(e: unknown, fallback: string): string {
+  return e instanceof Error ? e.message : fallback;
+}
 const TYPE_LABEL: Record<PromptType, string> = { text: "ข้อความ", image: "รูปภาพ", mixed: "ผสม (ภาพ + ข้อความ)" };
 
 interface SideFieldsProps {
@@ -26,14 +55,19 @@ interface SideFieldsProps {
   onType: (t: PromptType) => void;
   onText: (v: string) => void;
   onImage: (v: string | undefined) => void;
+  onUpload: (file: File) => Promise<string | undefined>;
 }
 
-function SideFields({ title, type, text, image, onType, onText, onImage }: SideFieldsProps) {
+function SideFields({ title, type, text, image, onType, onText, onImage, onUpload }: SideFieldsProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   async function handleUpload(file: File | null) {
     if (!file) return;
-    onImage(await fileToImageDataUrl(file));
+    setUploading(true);
+    const url = await onUpload(file);
+    setUploading(false);
+    if (url) onImage(url);
   }
   const needsImage = type === "image" || type === "mixed";
   return (
@@ -75,6 +109,7 @@ function SideFields({ title, type, text, image, onType, onText, onImage }: SideF
               type="file"
               accept="image/*"
               className="hidden"
+              disabled={uploading}
               onChange={(e) => {
                 const file = e.target.files?.[0] ?? null;
                 setFileName(file ? file.name : null);
@@ -85,13 +120,16 @@ function SideFields({ title, type, text, image, onType, onText, onImage }: SideF
             <Button
               type="button"
               size="sm"
+              disabled={uploading}
               className="f1-font-display bg-[#DC0000] text-white hover:bg-[#b00000]"
               onClick={() => fileRef.current?.click()}
             >
               📁 เลือกรูปจากเครื่อง
             </Button>
             <span className="max-w-48 truncate text-xs text-f1-mute" title={fileName ?? undefined}>
-              {fileName ?? (image?.startsWith("data:") ? "ใช้รูปที่อัปโหลดแล้ว" : "ยังไม่ได้เลือกไฟล์")}
+              {uploading
+                ? "กำลังอัปโหลด..."
+                : fileName ?? (image?.startsWith("data:") ? "ใช้รูปที่อัปโหลดแล้ว" : "ยังไม่ได้เลือกไฟล์")}
             </span>
             {image && (
               <Button
@@ -115,14 +153,35 @@ function SideFields({ title, type, text, image, onType, onText, onImage }: SideF
 
 export function EditPage() {
   const navigate = useNavigate();
+  const [secret, setSecret] = useState<string>(readSecret);
+  const [secretInput, setSecretInput] = useState("");
+  const [checkingSecret, setCheckingSecret] = useState(false);
   const [game, setGame] = useState<Theme | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    getGame().then(setGame);
-  }, []);
+    if (!secret || game) return;
+    getGame()
+      .then(setGame)
+      .catch((e) => {
+        if (!(e instanceof NoGameError)) {
+          setLoadError(errorText(e, "โหลดชุดคำถามไม่ได้"));
+          return;
+        }
+        const legacy = readLegacyLocalGame();
+        if (legacy) {
+          setGame(legacy);
+          setNotice("server ยังไม่มีชุดคำถาม — นำข้อมูลเดิมจากเครื่องนี้มาให้ กดบันทึกเพื่อขึ้น server");
+        } else {
+          setGame(makeDemoGame());
+          setNotice("server ยังไม่มีชุดคำถาม — เริ่มจากชุดตัวอย่าง F1 แก้แล้วกดบันทึก");
+        }
+      });
+  }, [secret, game]);
 
   useEffect(() => {
     if (!status) return;
@@ -130,11 +189,90 @@ export function EditPage() {
     return () => clearTimeout(t);
   }, [status]);
 
+  function forgetSecret(message: string) {
+    writeSecret("");
+    setSecret("");
+    setStatus(null);
+    setLoadError(message);
+  }
+
+  async function handleSubmitSecret() {
+    const value = secretInput.trim();
+    if (!value) return;
+    setCheckingSecret(true);
+    try {
+      if (await verifyAdmin(value)) {
+        writeSecret(value);
+        setSecret(value);
+        setSecretInput("");
+        setLoadError(null);
+      } else {
+        setLoadError("รหัสผู้ดูแลไม่ถูกต้อง");
+      }
+    } catch (e) {
+      setLoadError(errorText(e, "ตรวจรหัสไม่สำเร็จ"));
+    } finally {
+      setCheckingSecret(false);
+    }
+  }
+
+  async function handleUploadImage(file: File): Promise<string | undefined> {
+    try {
+      return await uploadImage(await fileToUploadableImage(file), secret);
+    } catch (e) {
+      if (e instanceof UnauthorizedError) forgetSecret("รหัสผู้ดูแลหมดอายุหรือไม่ถูกต้อง ใส่ใหม่อีกครั้ง");
+      else setStatus(errorText(e, "อัปโหลดรูปไม่สำเร็จ"));
+      return undefined;
+    }
+  }
+
+  if (!secret) {
+    return (
+      <div className="f1-carbon-bg min-h-screen">
+        <F1Header />
+        <main className="mx-auto max-w-md space-y-3 p-6">
+          <h1 className="f1-font-display text-2xl font-bold text-white">🔒 EDIT MODE</h1>
+          <form
+            className="space-y-3 rounded-sm border-2 border-[#333] bg-black/70 p-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSubmitSecret();
+            }}
+          >
+            <label className="block space-y-1 text-sm text-[#FFD60A]">
+              <span>รหัสผู้ดูแล</span>
+              <Input
+                type="password"
+                autoFocus
+                value={secretInput}
+                onChange={(e) => setSecretInput(e.target.value)}
+                className="bg-[#161616] text-white"
+              />
+            </label>
+            {loadError && <p className="text-sm text-red-300">{loadError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" className="border-[#333] text-white" onClick={() => navigate("/")}>
+                กลับไปเล่น
+              </Button>
+              <Button
+                type="submit"
+                disabled={checkingSecret || !secretInput.trim()}
+                className="f1-font-display bg-[#DC0000] text-white hover:bg-[#b00000]"
+              >
+                {checkingSecret ? "กำลังตรวจ..." : "เข้าสู่ EDIT MODE"}
+              </Button>
+            </div>
+          </form>
+        </main>
+      </div>
+    );
+  }
+
   if (!game) {
     return (
       <div className="f1-paper-bg min-h-screen">
         <F1Header />
-        <main className="mx-auto max-w-3xl p-6 text-zinc-700">กำลังโหลด...</main>
+        <main className="mx-auto max-w-3xl p-6 text-zinc-700">{loadError ?? "กำลังโหลด..."}</main>
       </div>
     );
   }
@@ -169,9 +307,15 @@ export function EditPage() {
       return;
     }
     setSaving(true);
-    await saveGame(game);
-    setSaving(false);
-    navigate("/");
+    try {
+      await saveGame(game, secret);
+      navigate("/");
+    } catch (e) {
+      if (e instanceof UnauthorizedError) forgetSecret("รหัสผู้ดูแลหมดอายุหรือไม่ถูกต้อง ใส่ใหม่แล้วกดบันทึกอีกครั้ง");
+      else setStatus(errorText(e, "บันทึกไม่สำเร็จ"));
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleCopyJson() {
@@ -207,6 +351,9 @@ export function EditPage() {
       <F1Header />
       <main className="mx-auto max-w-4xl space-y-4 p-6">
         <h1 className="f1-font-display text-2xl font-bold text-f1-ink">🛠️ EDIT MODE • แก้ไขโจทย์</h1>
+        {notice && (
+          <p className="rounded-sm border border-f1-line bg-zinc-50 px-3 py-2 text-sm text-zinc-700">{notice}</p>
+        )}
 
         <div className="grid gap-3 rounded-sm border-2 border-f1-line bg-white/90 p-4 sm:grid-cols-2">
           <label className="space-y-1 text-sm text-zinc-700">
@@ -257,6 +404,7 @@ export function EditPage() {
                 onType={(t) => updatePair(pair.id, { promptType: t })}
                 onText={(v) => updatePair(pair.id, { promptText: v })}
                 onImage={(v) => updatePair(pair.id, { promptImage: v })}
+                onUpload={handleUploadImage}
               />
               <SideFields
                 title="✅ คำตอบ (ขวา)"
@@ -266,6 +414,7 @@ export function EditPage() {
                 onType={(t) => updatePair(pair.id, { answerType: t })}
                 onText={(v) => updatePair(pair.id, { answerText: v })}
                 onImage={(v) => updatePair(pair.id, { answerImage: v })}
+                onUpload={handleUploadImage}
               />
             </div>
 

@@ -1,0 +1,130 @@
+# I-DOJO (Pit 5 Station) — Deployment
+
+เอกสารนี้อธิบายว่า production รันอยู่ที่ไหนและตั้งค่าอย่างไร
+**ทุกการแก้โค้ดต้องไม่ทำให้ค่าในเอกสารนี้พัง** ถ้าจำเป็นต้องเปลี่ยน ให้แก้เอกสารนี้ด้วยใน commit เดียวกัน
+
+## Production host
+
+| รายการ | ค่า |
+|---|---|
+| เครื่อง | Raspberry Pi (`raspberrypi`), user `idojo` |
+| OS | Raspberry Pi OS (Debian 13 trixie) |
+| Web server | Apache2 (`apache2`, ไม่ใช่ `httpd`) |
+| Database | MariaDB 11.8 บนเครื่องเดียวกัน, bind `127.0.0.1` |
+| Node.js | จาก Debian repo (`/usr/share/nodejs`) |
+| Process manager | PM2, process name `pit5_station`, รันในชื่อ user `idojo` (ห้ามรันเป็น root) |
+| Repo path | `/var/www/pit5_station` (owner `idojo:idojo`) |
+
+## URL และ path
+
+- Frontend เข้าที่ `http://<IP ของ Pi>/I-DOJO/`
+- API เข้าที่ `http://<IP ของ Pi>/I-DOJO/api/...` → Apache proxy ไป `http://127.0.0.1:5000/api/...`
+- Backend (Express) listen port **5000**
+- ทุก route ของ backend ต้องขึ้นต้นด้วย `/api/`
+
+## Frontend
+
+- Vite build output: `frontend/` → `../backend/build` (Apache เสิร์ฟจากโฟลเดอร์นี้โดยตรง)
+- `vite.config.ts` ต้องมี `base: '/I-DOJO/'` ไม่งั้น asset (JS/CSS) โหลดไม่ขึ้น
+- `routes.tsx` ใช้ `basename: '/I-DOJO'` ตายตัว (เลิกรองรับ Netlify แล้ว)
+- การเรียก API ต้องเป็น path แบบ relative ที่ขึ้นต้นด้วย base (เช่น `/I-DOJO/api/...` หรือสร้างจาก `import.meta.env.BASE_URL`)
+  **ห้าม hardcode `http://localhost:5000`** เพราะจะชี้ไปเครื่องของคนที่เปิดเว็บ
+
+## Backend
+
+- Entry: `backend/index.js`
+- ตอนเริ่มจะสร้างตาราง `records`, `app_config` และ `game` เองถ้ายังไม่มี
+- ชุดคำถามของเกมเก็บในตาราง `game` (แถวเดียว, JSON) ผ่าน `GET /api/game` (404 = ยังไม่มี) และ `PUT /api/game`
+- `PUT /api/game`, `POST /api/upload`, `GET /api/admin/check`, `DELETE /api/records` ต้องส่ง header `x-admin-secret` ตรงกับ `ADMIN_SECRET` — ผู้ดูแลกรอกรหัสนี้ในหน้า `/I-DOJO/editor` (ไม่ได้ฝังใน frontend) ถ้า `ADMIN_SECRET` ว่างจะบันทึกไม่ได้เลย
+- Config อยู่ใน `backend/.env` (ไม่ commit, permission `600`, owner `idojo`)
+- ต้องมี `backend/.env.example` ที่ระบุ key ทุกตัวโดยไม่มีค่าจริง
+
+ตัวแปรที่ใช้ (ดูชื่อจริงจาก `.env.example`):
+
+```
+PORT=5000
+DB_HOST=localhost
+DB_USER=idojo
+DB_PASS=
+DB_NAME=pit5_station
+ADMIN_SECRET=
+```
+
+- ไม่มี `DB_PORT` — โค้ดไม่ได้อ่าน ใช้ default ของ mariadb (3306)
+- `ADMIN_SECRET` = รหัสผู้ดูแลสำหรับบันทึกชุดคำถาม/อัปโหลดรูป (ดูข้างบน)
+- ไฟล์ที่อัปโหลดเก็บใน `backend/uploads/` (relative กับ working dir ของ PM2 จึงต้อง `pm2 start` จากใน `backend/`) เปิดได้ที่ `/I-DOJO/api/uploads/<file>`
+- Express ยังเสิร์ฟ `backend/build` ที่ `/I-DOJO` ด้วย (ไว้ทดสอบตรง port 5000 โดยไม่มี Apache) และตัด `/I-DOJO` ออกจาก `/I-DOJO/api/...` เองแบบเดียวกับ Apache — บน Pi ส่วนนี้ Apache เสิร์ฟเอง
+- เกมถูกฝังเป็น iframe บนจอ Station ของ portal — **ห้ามเพิ่ม `X-Frame-Options` หรือ CSP `frame-ancestors`** ใน Apache (ดู `PORTAL_INTEGRATION.md`)
+
+## Apache config
+
+ไฟล์ `/etc/apache2/sites-available/pit5_station.conf` (เปิดด้วย `a2ensite`, ปิด `000-default` แล้ว)
+Module ที่ต้องเปิด: `rewrite proxy proxy_http`
+
+```apache
+<VirtualHost *:80>
+    ServerName 127.0.0.1
+
+    Alias /I-DOJO /var/www/pit5_station/backend/build
+
+    <Directory /var/www/pit5_station/backend/build>
+        Options FollowSymLinks
+        AllowOverride None
+        Require all granted
+
+        RewriteEngine On
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteCond %{REQUEST_FILENAME} !-d
+        RewriteRule ^ /I-DOJO/index.html [QSA,L]
+    </Directory>
+
+    ProxyPass        /I-DOJO/api/ http://127.0.0.1:5000/api/
+    ProxyPassReverse /I-DOJO/api/ http://127.0.0.1:5000/api/
+
+    <LocationMatch "^/I-DOJO/\.">
+        Require all denied
+    </LocationMatch>
+</VirtualHost>
+```
+
+ถ้าเพิ่ม WebSocket / Socket.io ต้องเปิด `proxy_wstunnel` และเพิ่ม ProxyPass สำหรับ `ws://`
+
+## ขั้นตอน deploy บน Pi
+
+```bash
+cd /var/www/pit5_station
+git pull
+
+cd backend
+npm install --omit=dev
+
+cd ../frontend
+npm install
+npm run build
+
+pm2 restart pit5_station
+```
+
+ครั้งแรกเท่านั้น:
+
+```bash
+cd /var/www/pit5_station/backend
+pm2 start index.js --name pit5_station
+pm2 save
+pm2 startup systemd   # แล้วรันคำสั่ง sudo ที่มันพิมพ์ออกมา
+```
+
+## ตรวจสอบหลัง deploy
+
+```bash
+grep -o 'src="[^"]*"' backend/build/index.html   # ต้องเห็น /I-DOJO/assets/...
+curl -I http://localhost/I-DOJO/                  # ต้องได้ 200
+pm2 logs pit5_station --lines 20
+```
+
+## กฎสำหรับการแก้โค้ด
+
+- ห้าม commit `.env`, `node_modules/`
+- ห้าม hardcode IP, port หรือ `localhost` ในโค้ด frontend
+- เพิ่ม route ใหม่ฝั่ง backend ให้อยู่ใต้ `/api/`
+- ถ้าเปลี่ยน port, base path หรือโฟลเดอร์ build ให้แก้เอกสารนี้และ Apache config ด้วย
