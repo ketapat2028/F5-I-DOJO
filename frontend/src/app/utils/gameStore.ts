@@ -1,14 +1,15 @@
 import type { MatchPair, PromptType, Theme } from "../types/theme";
 
-// pairs ทั้งหมด (รวมภาพและ videoUrl) เก็บที่ key นี้ ส่วนชื่อเกม/เวลาจำกัดแยกไว้อีก key
-// ทุกฟังก์ชันคืน Promise ไว้แล้ว เพื่อสลับไปเรียก backend API จริงภายหลังได้โดยไม่ต้องแก้หน้าจอ
+// key เดิมตอนยังเก็บใน localStorage — เหลือไว้อ่านเพื่อย้ายข้อมูลขึ้น server เท่านั้น (readLegacyLocalGame)
 export const PAIRS_KEY = "f1-dojo-pairs-v4-click-match";
 const META_KEY = "idojo.f1.meta.v4";
 const DEFAULT_NAME = "DOJO · F1 RACING RED";
 const DEFAULT_TIME = 300;
 
+// crypto.randomUUID ใช้ได้เฉพาะ secure context — เปิดผ่าน http://<IP ของ Pi> จะไม่มี
 function genId(): string {
-  return crypto.randomUUID();
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
 export function makeEmptyPair(): MatchPair {
@@ -169,64 +170,112 @@ function recordsToPairs(data: unknown): MatchPair[] {
   });
 }
 
-function readMeta(): { name: string; timeLimitSeconds: number } {
-  try {
-    const raw = localStorage.getItem(META_KEY);
-    if (raw) {
-      const m = JSON.parse(raw);
-      return {
-        name: typeof m.name === "string" && m.name ? m.name : DEFAULT_NAME,
-        timeLimitSeconds: Number.isFinite(m.timeLimitSeconds) ? Math.max(0, m.timeLimitSeconds) : DEFAULT_TIME,
-      };
-    }
-  } catch {
-    // ใช้ค่าเริ่มต้น
+// ===== ชุดคำถามเก็บที่ backend (/api/game) =====
+// เกมถูกฝังเป็น iframe ข้ามเว็บบนจอ Station — Chromium แยก localStorage ของ iframe จึงต้องอ่านจาก API เท่านั้น
+const API = `${import.meta.env.BASE_URL}api`;
+
+export class NoGameError extends Error {
+  constructor() {
+    super("ยังไม่มีชุดคำถามบน server");
   }
-  return { name: DEFAULT_NAME, timeLimitSeconds: DEFAULT_TIME };
 }
 
-function readPairs(): MatchPair[] {
-  const raw = localStorage.getItem(PAIRS_KEY);
-  if (raw) {
-    try {
-      const pairs = recordsToPairs(JSON.parse(raw));
-      if (pairs.length >= 2) return pairs;
-    } catch {
-      // ตกไปใช้ข้อมูลเริ่มต้น
-    }
+export class UnauthorizedError extends Error {
+  constructor() {
+    super("รหัสผู้ดูแลไม่ถูกต้อง");
   }
-  const seeded = seedPairs();
-  localStorage.setItem(PAIRS_KEY, JSON.stringify(seeded.map(toSpecRecord)));
-  return seeded;
 }
 
-export async function getGame(): Promise<Theme> {
-  const meta = readMeta();
+function toPayload(game: Theme) {
+  return { name: game.name, timeLimitSeconds: game.timeLimitSeconds, pairs: game.pairs.map(toSpecRecord) };
+}
+
+function fromPayload(data: unknown): Theme {
+  const m = isObject(data) ? data : {};
   return {
     id: "f1-board",
-    name: meta.name,
-    timeLimitSeconds: meta.timeLimitSeconds,
-    pairs: readPairs(),
+    name: typeof m.name === "string" && m.name ? m.name : DEFAULT_NAME,
+    timeLimitSeconds: Number.isFinite(m.timeLimitSeconds) ? Math.max(0, m.timeLimitSeconds as number) : DEFAULT_TIME,
+    pairs: recordsToPairs(data),
     createdAt: 0,
     updatedAt: 0,
   };
 }
 
-export async function saveGame(game: Theme): Promise<Theme> {
-  localStorage.setItem(PAIRS_KEY, JSON.stringify(game.pairs.map(toSpecRecord)));
-  localStorage.setItem(
-    META_KEY,
-    JSON.stringify({ name: game.name, timeLimitSeconds: game.timeLimitSeconds }),
-  );
+async function failure(res: Response, what: string): Promise<Error> {
+  if (res.status === 401) return new UnauthorizedError();
+  let detail = "";
+  try {
+    const body = await res.json();
+    if (typeof body?.error === "string") detail = `: ${body.error}`;
+  } catch {
+    // ไม่มี body เป็น JSON
+  }
+  return new Error(`${what}ไม่สำเร็จ (${res.status})${detail}`);
+}
+
+export async function getGame(): Promise<Theme> {
+  const res = await fetch(`${API}/game`, { cache: "no-store" });
+  if (res.status === 404) throw new NoGameError();
+  if (!res.ok) throw await failure(res, "โหลดชุดคำถาม");
+  const game = fromPayload(await res.json());
+  if (game.pairs.length < 2) throw new NoGameError();
+  return game;
+}
+
+export async function saveGame(game: Theme, adminSecret: string): Promise<Theme> {
+  const res = await fetch(`${API}/game`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "x-admin-secret": adminSecret },
+    body: JSON.stringify(toPayload(game)),
+  });
+  if (!res.ok) throw await failure(res, "บันทึก");
   return { ...game, updatedAt: Date.now() };
 }
 
+export async function verifyAdmin(adminSecret: string): Promise<boolean> {
+  const res = await fetch(`${API}/admin/check`, { headers: { "x-admin-secret": adminSecret } });
+  if (res.status === 401) return false;
+  if (!res.ok) throw await failure(res, "ตรวจรหัส");
+  return true;
+}
+
+// คืน URL ของรูปบน server (/I-DOJO/api/uploads/<file>) ไว้เก็บแทน base64
+export async function uploadImage(file: Blob, adminSecret: string): Promise<string> {
+  const form = new FormData();
+  const name = file instanceof File ? file.name : "image.jpg";
+  form.append("image", file, name);
+  const res = await fetch(`${API}/upload`, {
+    method: "POST",
+    headers: { "x-admin-secret": adminSecret },
+    body: form,
+  });
+  if (!res.ok) throw await failure(res, "อัปโหลดรูป");
+  const { filename } = await res.json();
+  return `${API}/uploads/${filename}`;
+}
+
+// ชุดตัวอย่าง F1 ให้ editor ใช้เป็นจุดเริ่มเมื่อ server ยังไม่มีข้อมูล
+export function makeDemoGame(): Theme {
+  return { ...fromPayload({}), pairs: seedPairs() };
+}
+
+// ข้อมูลเดิมที่เคยเก็บใน localStorage ของ browser นี้ (ก่อนย้ายไป backend) — ใช้ย้ายขึ้น server ครั้งเดียว
+export function readLegacyLocalGame(): Theme | null {
+  try {
+    const raw = localStorage.getItem(PAIRS_KEY);
+    if (!raw) return null;
+    const pairs = recordsToPairs(JSON.parse(raw));
+    if (pairs.length < 2) return null;
+    const meta = JSON.parse(localStorage.getItem(META_KEY) ?? "{}");
+    return { ...fromPayload(meta), pairs };
+  } catch {
+    return null;
+  }
+}
+
 export function exportGameJson(game: Theme): string {
-  return JSON.stringify(
-    { name: game.name, timeLimitSeconds: game.timeLimitSeconds, pairs: game.pairs.map(toSpecRecord) },
-    null,
-    2,
-  );
+  return JSON.stringify(toPayload(game), null, 2);
 }
 
 function sideComplete(type: PromptType, text: string, image?: string): boolean {

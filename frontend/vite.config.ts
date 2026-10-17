@@ -3,29 +3,25 @@ import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig(({ mode }) => {
-  const isHosted = mode === 'hosted';
-  const base = isHosted ? '/' : '/I-DOJO/';
-
-  return {
-    base,
-    plugins: [react(), tailwindcss()],
-    resolve: {
-      alias: {
-        '@': path.resolve(__dirname, './src'),
+// production บน Pi: Apache เสิร์ฟ backend/build ที่ /I-DOJO — ห้ามเปลี่ยน base/outDir (ดู DEPLOYMENT.md)
+export default defineConfig({
+  base: '/I-DOJO/',
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
+  server: {
+    proxy: {
+      '/I-DOJO/api': {
+        target: 'http://localhost:5000',
+        rewrite: (path) => path.replace('/I-DOJO', ''),
       },
     },
-    server: {
-      proxy: {
-        '/I-DOJO/api': {
-          target: 'http://localhost:5000',
-          rewrite: (path) => path.replace('/I-DOJO', ''),
-        },
-      },
-    },
-    build: {
-      outDir: isHosted ? 'dist' : '../backend/build',
-      emptyOutDir: true,
-    },
-  };
+  },
+  build: {
+    outDir: '../backend/build',
+    emptyOutDir: true,
+  },
 });
