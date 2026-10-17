@@ -16,8 +16,8 @@ BigInt.prototype.toJSON = function () {
 // ========== MIDDLEWARE ==========
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static('uploads'));
-app.use('/I-DOJO/uploads', express.static('uploads'));
+// อยู่ใต้ /api/ เพื่อให้ Apache บน Pi proxy มาถึง (/I-DOJO/api/uploads/<file>)
+app.use('/api/uploads', express.static('uploads'));
 
 // ========== Multer config ==========
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
@@ -41,6 +41,7 @@ const upload = multer({
 });
 
 // ========== STATIC FILE SERVING + SPA FALLBACK ==========
+// ใช้ตอนรันโดยไม่มี Apache (เปิดตรง port 5000) — บน Pi ส่วนนี้ Apache เสิร์ฟจาก backend/build เอง
 const BUILD_PATH = path.join(__dirname, 'build');
 if (fs.existsSync(BUILD_PATH)) {
   app.use('/I-DOJO', express.static(BUILD_PATH));

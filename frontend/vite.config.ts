@@ -21,9 +21,6 @@ export default defineConfig(({ mode }) => {
           target: 'http://localhost:5000',
           rewrite: (path) => path.replace('/I-DOJO', ''),
         },
-        '/I-DOJO/uploads': {
-          target: 'http://localhost:5000',
-        },
       },
     },
     build: {
