@@ -31,23 +31,28 @@ export interface SpecRecord {
   videoDesc?: string;
 }
 
-function svg(markup: string): string {
+function svg(markup: string, width = 320): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(
-    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 180'><rect width='320' height='180' fill='#161616'/>${markup}</svg>`,
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ${width} 180'>${markup}</svg>`,
   )}`;
 }
 
 const IMG_FERRARI_CAR = svg(
-  "<rect y='128' width='320' height='52' fill='#2a2a2a'/>" +
+  "<defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='#f4f4f5'/><stop offset='1' stop-color='#d4d4d8'/></linearGradient></defs>" +
+    "<rect width='640' height='180' fill='url(#g)'/>" +
+    "<path d='M0 180 L150 0 H210 L60 180Z' fill='#DC0000' opacity='0.18'/><path d='M60 180 L210 0 H232 L82 180Z' fill='#111113' opacity='0.12'/>" +
+    "<rect y='132' width='640' height='48' fill='#3f3f46'/><path d='M0 156 H640' stroke='#f4f4f5' stroke-width='4' stroke-dasharray='34 26'/>" +
+    "<g transform='translate(140 -6)'>" +
     "<path d='M40 118 L70 98 L130 92 L170 78 L230 82 L262 100 L292 104 L292 122 L40 122 Z' fill='#DC0000'/>" +
     "<rect x='258' y='84' width='40' height='6' fill='#DC0000'/><rect x='30' y='96' width='22' height='5' fill='#DC0000'/>" +
-    "<circle cx='96' cy='124' r='22' fill='#0a0a0a' stroke='#666' stroke-width='4'/>" +
-    "<circle cx='236' cy='124' r='22' fill='#0a0a0a' stroke='#666' stroke-width='4'/>" +
-    "<text x='160' y='42' font-family='Arial' font-weight='bold' font-size='28' fill='#FFD60A' text-anchor='middle'>SF-23</text>",
+    "<circle cx='96' cy='126' r='24' fill='#111113' stroke='#8b8b95' stroke-width='4'/><circle cx='236' cy='126' r='24' fill='#111113' stroke='#8b8b95' stroke-width='4'/>" +
+    "</g>" +
+    "<text x='480' y='78' font-family='Arial' font-weight='bold' font-size='40' fill='#111113' text-anchor='middle'>SF-23</text>",
+  640,
 );
 const IMG_FERRARI_LOGO = svg(
-  "<path d='M105 22 H215 V92 Q215 140 160 160 Q105 140 105 92 Z' fill='#FFD60A' stroke='#fff' stroke-width='4'/>" +
-    "<rect x='105' y='22' width='110' height='14' fill='#22C55E'/><rect x='105' y='36' width='110' height='8' fill='#fff'/><rect x='105' y='44' width='110' height='8' fill='#DC0000'/>" +
+  "<path d='M105 22 H215 V92 Q215 140 160 160 Q105 140 105 92 Z' fill='#FFD60A' stroke='#111113' stroke-width='4'/>" +
+    "<rect x='105' y='22' width='110' height='14' fill='#22C55E'/><rect x='105' y='36' width='110' height='8' fill='#f4f4f5'/><rect x='105' y='44' width='110' height='8' fill='#DC0000'/>" +
     "<text x='160' y='104' font-family='Arial' font-weight='bold' font-size='34' fill='#111' text-anchor='middle'>SF</text>" +
     "<text x='160' y='130' font-family='Arial' font-weight='bold' font-size='16' fill='#DC0000' text-anchor='middle'>FERRARI</text>",
 );
@@ -57,10 +62,17 @@ const IMG_REDBULL = svg(
     "<text x='160' y='128' font-family='Arial' font-weight='bold' font-size='18' fill='#fff' text-anchor='middle'>RED BULL RACING</text>",
 );
 const IMG_TROPHY = svg(
-  "<path d='M115 38 H205 V82 Q205 118 160 124 Q115 118 115 82 Z' fill='#FFD60A'/>" +
+  "<defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='#f4f4f5'/><stop offset='1' stop-color='#d4d4d8'/></linearGradient></defs>" +
+    "<rect width='640' height='180' fill='url(#g)'/>" +
+    "<path d='M400 180 L520 0 H580 L460 180Z' fill='#DC0000' opacity='0.18'/><path d='M460 180 L580 0 H602 L482 180Z' fill='#111113' opacity='0.12'/>" +
+    "<path d='M0 0 H120 L0 120Z' fill='#111113' opacity='0.06'/>" +
+    "<g transform='translate(320 40) scale(0.78) translate(-160 -38)'>" +
+    "<path d='M115 38 H205 V82 Q205 118 160 124 Q115 118 115 82 Z' fill='#FFD60A' stroke='#B8860B' stroke-width='3'/>" +
     "<path d='M115 50 H92 Q92 86 118 92 M205 50 H228 Q228 86 202 92' fill='none' stroke='#FFD60A' stroke-width='8'/>" +
     "<rect x='150' y='124' width='20' height='26' fill='#FFD60A'/><rect x='126' y='150' width='68' height='12' fill='#FFD60A'/>" +
-    "<text x='160' y='30' font-family='Arial' font-weight='bold' font-size='20' fill='#fff' text-anchor='middle'>2023</text>",
+    "</g>" +
+    "<text x='470' y='96' font-family='Arial' font-weight='bold' font-size='44' fill='#111113' text-anchor='middle'>2023</text>",
+  640,
 );
 
 function seedPairs(): MatchPair[] {
@@ -185,12 +197,37 @@ function readMeta(): { name: string; timeLimitSeconds: number } {
   return { name: DEFAULT_NAME, timeLimitSeconds: DEFAULT_TIME };
 }
 
+// ภาพตัวอย่างรุ่นแรกมีพื้นหลังสีดำ (#161616) ซึ่งไม่เข้ากับธีมสว่าง จึงสลับเป็นภาพชุดใหม่ให้อัตโนมัติ (เฉพาะภาพตัวอย่างเดิมที่ยังไม่ถูกแก้)
+function migrateLegacyImages(pairs: MatchPair[]): { pairs: MatchPair[]; changed: boolean } {
+  const legacy = (u?: string) => !!u && u.startsWith("data:image/svg+xml") && u.includes("%23161616");
+  const oldBanner = (p: MatchPair) =>
+    (p.id === "p7" || p.id === "p8") && !!p.promptImage?.startsWith("data:image/svg+xml") && p.promptImage.includes("%20320%20180");
+  if (!pairs.some((p) => legacy(p.promptImage) || legacy(p.answerImage) || oldBanner(p))) return { pairs, changed: false };
+  const seed = new Map(seedPairs().map((p) => [p.id, p]));
+  return {
+    changed: true,
+    pairs: pairs.map((p) => {
+      const fresh = seed.get(p.id);
+      if (!fresh) return p;
+      return {
+        ...p,
+        promptImage: legacy(p.promptImage) || oldBanner(p) ? fresh.promptImage : p.promptImage,
+        answerImage: legacy(p.answerImage) ? fresh.answerImage : p.answerImage,
+      };
+    }),
+  };
+}
+
 function readPairs(): MatchPair[] {
   const raw = localStorage.getItem(PAIRS_KEY);
   if (raw) {
     try {
-      const pairs = recordsToPairs(JSON.parse(raw));
-      if (pairs.length >= 2) return pairs;
+      const parsed = recordsToPairs(JSON.parse(raw));
+      if (parsed.length >= 2) {
+        const { pairs, changed } = migrateLegacyImages(parsed);
+        if (changed) localStorage.setItem(PAIRS_KEY, JSON.stringify(pairs.map(toSpecRecord)));
+        return pairs;
+      }
     } catch {
       // ตกไปใช้ข้อมูลเริ่มต้น
     }

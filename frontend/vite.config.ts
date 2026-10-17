@@ -16,6 +16,9 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      port: 5173,
+      strictPort: true,
+      open: true,
       proxy: {
         '/I-DOJO/api': {
           target: 'http://localhost:5000',

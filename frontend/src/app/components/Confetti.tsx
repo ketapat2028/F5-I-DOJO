@@ -1,4 +1,4 @@
-const COLORS = ["#DC0000", "#FFD60A", "#FFFFFF", "#22c55e", "#3b82f6"];
+const COLORS = ["#DC0000", "#111113", "#DC0000", "#8B8B95", "#22C55E"];
 
 const PIECES = Array.from({ length: 48 }, (_, i) => ({
   left: (i * 37) % 100,
