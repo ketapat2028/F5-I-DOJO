@@ -11,6 +11,7 @@
 - เพิ่ม `DEPLOYMENT.md` อธิบายสภาพ production บน Raspberry Pi (Apache + PM2 + MariaDB)
 
 ### Changed
+- รวม branch `NewDsign`: เปลี่ยนเป็นธีมสว่าง (หน้าเกม, editor, header, confetti, `f1.css` เพิ่ม variant `fit` สำหรับจอใหญ่) · ปุ่ม "📁 เลือกรูปจากเครื่อง" ใน editor · รูปตัวอย่าง F1 ชุดใหม่ · เพิ่ม `run-dev.bat` เปิด dev server — ไม่แตะ API และการส่งผลไป portal
 - ชุดคำถามย้ายจาก localStorage ไปเก็บที่ backend — เกมใน iframe ข้ามเว็บมองไม่เห็น localStorage ของหน้า editor · ถ้าโหลดไม่ได้หรือยังไม่มีชุดคำถาม หน้าเกมแสดงข้อความแทน (ไม่ใช้ข้อมูลตัวอย่างเงียบ ๆ)
 - รูปในชุดคำถามอัปโหลดขึ้น server (`/api/upload`) แล้วเก็บเป็น URL แทน base64 (ยังย่อเหลือกว้าง 900px ก่อนส่ง) รูป base64 เดิมยังใช้ได้
 - `express.json` รับได้ถึง 10mb เผื่อชุดคำถามเก่าที่มีรูป base64
