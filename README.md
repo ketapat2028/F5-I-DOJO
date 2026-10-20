@@ -19,11 +19,9 @@ i-dojo/
 │           ├── routes.tsx
 │           ├── components/
 │           │   └── ui/        UI primitives (button, card, input, ...)
-│           ├── pages/         HomePage, DashboardPage
-│           └── utils/         apiClient, mode
-├── gas/
-│   └── Code.gs         Google Apps Script template
-└── netlify.toml
+│           ├── pages/         PlayPage, EditPage, DashboardPage
+│           └── utils/         gameStore (API /api/game), portalBridge, apiClient
+└── gas/Code.gs         Google Apps Script template
 ```
 
 ## เริ่มใช้งาน
@@ -43,4 +41,6 @@ npm install
 npm run dev              # http://localhost:5173
 ```
 
-ตัวอย่าง API ที่ให้มา (`/api/records`, `/api/app-config`, `/api/upload`) เป็น placeholder — แก้ schema/endpoint ใน `backend/index.js` และหน้า `frontend/src/app/pages/DashboardPage.tsx` ให้ตรงกับโดเมนจริงของ i-dojo ได้เลย
+ชุดคำถามของเกมเก็บที่ backend (`/api/game`) แก้ได้ที่หน้า `/I-DOJO/editor` ด้วยรหัสผู้ดูแล (`ADMIN_SECRET`) · เกมถูกฝังเป็น iframe บนจอ Station ของ I-Dojo LPB portal ดู `PORTAL_INTEGRATION.md` · production บน Raspberry Pi ดู `DEPLOYMENT.md`
+
+`/api/records`, `/api/app-config` และหน้า `/dashboard` ยังเป็นโค้ดตัวอย่างจาก template

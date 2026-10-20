@@ -1,14 +1,15 @@
 import type { MatchPair, PromptType, Theme } from "../types/theme";
 
-// pairs ทั้งหมด (รวมภาพและ videoUrl) เก็บที่ key นี้ ส่วนชื่อเกม/เวลาจำกัดแยกไว้อีก key
-// ทุกฟังก์ชันคืน Promise ไว้แล้ว เพื่อสลับไปเรียก backend API จริงภายหลังได้โดยไม่ต้องแก้หน้าจอ
+// key เดิมตอนยังเก็บใน localStorage — เหลือไว้อ่านเพื่อย้ายข้อมูลขึ้น server เท่านั้น (readLegacyLocalGame)
 export const PAIRS_KEY = "f1-dojo-pairs-v4-click-match";
 const META_KEY = "idojo.f1.meta.v4";
 const DEFAULT_NAME = "DOJO · F1 RACING RED";
 const DEFAULT_TIME = 300;
 
+// crypto.randomUUID ใช้ได้เฉพาะ secure context — เปิดผ่าน http://<IP ของ Pi> จะไม่มี
 function genId(): string {
-  return crypto.randomUUID();
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
 export function makeEmptyPair(): MatchPair {
@@ -31,23 +32,28 @@ export interface SpecRecord {
   videoDesc?: string;
 }
 
-function svg(markup: string): string {
+function svg(markup: string, width = 320): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(
-    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 180'><rect width='320' height='180' fill='#161616'/>${markup}</svg>`,
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ${width} 180'>${markup}</svg>`,
   )}`;
 }
 
 const IMG_FERRARI_CAR = svg(
-  "<rect y='128' width='320' height='52' fill='#2a2a2a'/>" +
+  "<defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='#f4f4f5'/><stop offset='1' stop-color='#d4d4d8'/></linearGradient></defs>" +
+    "<rect width='640' height='180' fill='url(#g)'/>" +
+    "<path d='M0 180 L150 0 H210 L60 180Z' fill='#DC0000' opacity='0.18'/><path d='M60 180 L210 0 H232 L82 180Z' fill='#111113' opacity='0.12'/>" +
+    "<rect y='132' width='640' height='48' fill='#3f3f46'/><path d='M0 156 H640' stroke='#f4f4f5' stroke-width='4' stroke-dasharray='34 26'/>" +
+    "<g transform='translate(140 -6)'>" +
     "<path d='M40 118 L70 98 L130 92 L170 78 L230 82 L262 100 L292 104 L292 122 L40 122 Z' fill='#DC0000'/>" +
     "<rect x='258' y='84' width='40' height='6' fill='#DC0000'/><rect x='30' y='96' width='22' height='5' fill='#DC0000'/>" +
-    "<circle cx='96' cy='124' r='22' fill='#0a0a0a' stroke='#666' stroke-width='4'/>" +
-    "<circle cx='236' cy='124' r='22' fill='#0a0a0a' stroke='#666' stroke-width='4'/>" +
-    "<text x='160' y='42' font-family='Arial' font-weight='bold' font-size='28' fill='#FFD60A' text-anchor='middle'>SF-23</text>",
+    "<circle cx='96' cy='126' r='24' fill='#111113' stroke='#8b8b95' stroke-width='4'/><circle cx='236' cy='126' r='24' fill='#111113' stroke='#8b8b95' stroke-width='4'/>" +
+    "</g>" +
+    "<text x='480' y='78' font-family='Arial' font-weight='bold' font-size='40' fill='#111113' text-anchor='middle'>SF-23</text>",
+  640,
 );
 const IMG_FERRARI_LOGO = svg(
-  "<path d='M105 22 H215 V92 Q215 140 160 160 Q105 140 105 92 Z' fill='#FFD60A' stroke='#fff' stroke-width='4'/>" +
-    "<rect x='105' y='22' width='110' height='14' fill='#22C55E'/><rect x='105' y='36' width='110' height='8' fill='#fff'/><rect x='105' y='44' width='110' height='8' fill='#DC0000'/>" +
+  "<path d='M105 22 H215 V92 Q215 140 160 160 Q105 140 105 92 Z' fill='#FFD60A' stroke='#111113' stroke-width='4'/>" +
+    "<rect x='105' y='22' width='110' height='14' fill='#22C55E'/><rect x='105' y='36' width='110' height='8' fill='#f4f4f5'/><rect x='105' y='44' width='110' height='8' fill='#DC0000'/>" +
     "<text x='160' y='104' font-family='Arial' font-weight='bold' font-size='34' fill='#111' text-anchor='middle'>SF</text>" +
     "<text x='160' y='130' font-family='Arial' font-weight='bold' font-size='16' fill='#DC0000' text-anchor='middle'>FERRARI</text>",
 );
@@ -57,10 +63,17 @@ const IMG_REDBULL = svg(
     "<text x='160' y='128' font-family='Arial' font-weight='bold' font-size='18' fill='#fff' text-anchor='middle'>RED BULL RACING</text>",
 );
 const IMG_TROPHY = svg(
-  "<path d='M115 38 H205 V82 Q205 118 160 124 Q115 118 115 82 Z' fill='#FFD60A'/>" +
+  "<defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='#f4f4f5'/><stop offset='1' stop-color='#d4d4d8'/></linearGradient></defs>" +
+    "<rect width='640' height='180' fill='url(#g)'/>" +
+    "<path d='M400 180 L520 0 H580 L460 180Z' fill='#DC0000' opacity='0.18'/><path d='M460 180 L580 0 H602 L482 180Z' fill='#111113' opacity='0.12'/>" +
+    "<path d='M0 0 H120 L0 120Z' fill='#111113' opacity='0.06'/>" +
+    "<g transform='translate(320 40) scale(0.78) translate(-160 -38)'>" +
+    "<path d='M115 38 H205 V82 Q205 118 160 124 Q115 118 115 82 Z' fill='#FFD60A' stroke='#B8860B' stroke-width='3'/>" +
     "<path d='M115 50 H92 Q92 86 118 92 M205 50 H228 Q228 86 202 92' fill='none' stroke='#FFD60A' stroke-width='8'/>" +
     "<rect x='150' y='124' width='20' height='26' fill='#FFD60A'/><rect x='126' y='150' width='68' height='12' fill='#FFD60A'/>" +
-    "<text x='160' y='30' font-family='Arial' font-weight='bold' font-size='20' fill='#fff' text-anchor='middle'>2023</text>",
+    "</g>" +
+    "<text x='470' y='96' font-family='Arial' font-weight='bold' font-size='44' fill='#111113' text-anchor='middle'>2023</text>",
+  640,
 );
 
 function seedPairs(): MatchPair[] {
@@ -169,64 +182,112 @@ function recordsToPairs(data: unknown): MatchPair[] {
   });
 }
 
-function readMeta(): { name: string; timeLimitSeconds: number } {
-  try {
-    const raw = localStorage.getItem(META_KEY);
-    if (raw) {
-      const m = JSON.parse(raw);
-      return {
-        name: typeof m.name === "string" && m.name ? m.name : DEFAULT_NAME,
-        timeLimitSeconds: Number.isFinite(m.timeLimitSeconds) ? Math.max(0, m.timeLimitSeconds) : DEFAULT_TIME,
-      };
-    }
-  } catch {
-    // ใช้ค่าเริ่มต้น
+// ===== ชุดคำถามเก็บที่ backend (/api/game) =====
+// เกมถูกฝังเป็น iframe ข้ามเว็บบนจอ Station — Chromium แยก localStorage ของ iframe จึงต้องอ่านจาก API เท่านั้น
+const API = `${import.meta.env.BASE_URL}api`;
+
+export class NoGameError extends Error {
+  constructor() {
+    super("ยังไม่มีชุดคำถามบน server");
   }
-  return { name: DEFAULT_NAME, timeLimitSeconds: DEFAULT_TIME };
 }
 
-function readPairs(): MatchPair[] {
-  const raw = localStorage.getItem(PAIRS_KEY);
-  if (raw) {
-    try {
-      const pairs = recordsToPairs(JSON.parse(raw));
-      if (pairs.length >= 2) return pairs;
-    } catch {
-      // ตกไปใช้ข้อมูลเริ่มต้น
-    }
+export class UnauthorizedError extends Error {
+  constructor() {
+    super("รหัสผู้ดูแลไม่ถูกต้อง");
   }
-  const seeded = seedPairs();
-  localStorage.setItem(PAIRS_KEY, JSON.stringify(seeded.map(toSpecRecord)));
-  return seeded;
 }
 
-export async function getGame(): Promise<Theme> {
-  const meta = readMeta();
+function toPayload(game: Theme) {
+  return { name: game.name, timeLimitSeconds: game.timeLimitSeconds, pairs: game.pairs.map(toSpecRecord) };
+}
+
+function fromPayload(data: unknown): Theme {
+  const m = isObject(data) ? data : {};
   return {
     id: "f1-board",
-    name: meta.name,
-    timeLimitSeconds: meta.timeLimitSeconds,
-    pairs: readPairs(),
+    name: typeof m.name === "string" && m.name ? m.name : DEFAULT_NAME,
+    timeLimitSeconds: Number.isFinite(m.timeLimitSeconds) ? Math.max(0, m.timeLimitSeconds as number) : DEFAULT_TIME,
+    pairs: recordsToPairs(data),
     createdAt: 0,
     updatedAt: 0,
   };
 }
 
-export async function saveGame(game: Theme): Promise<Theme> {
-  localStorage.setItem(PAIRS_KEY, JSON.stringify(game.pairs.map(toSpecRecord)));
-  localStorage.setItem(
-    META_KEY,
-    JSON.stringify({ name: game.name, timeLimitSeconds: game.timeLimitSeconds }),
-  );
+async function failure(res: Response, what: string): Promise<Error> {
+  if (res.status === 401) return new UnauthorizedError();
+  let detail = "";
+  try {
+    const body = await res.json();
+    if (typeof body?.error === "string") detail = `: ${body.error}`;
+  } catch {
+    // ไม่มี body เป็น JSON
+  }
+  return new Error(`${what}ไม่สำเร็จ (${res.status})${detail}`);
+}
+
+export async function getGame(): Promise<Theme> {
+  const res = await fetch(`${API}/game`, { cache: "no-store" });
+  if (res.status === 404) throw new NoGameError();
+  if (!res.ok) throw await failure(res, "โหลดชุดคำถาม");
+  const game = fromPayload(await res.json());
+  if (game.pairs.length < 2) throw new NoGameError();
+  return game;
+}
+
+export async function saveGame(game: Theme, adminSecret: string): Promise<Theme> {
+  const res = await fetch(`${API}/game`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "x-admin-secret": adminSecret },
+    body: JSON.stringify(toPayload(game)),
+  });
+  if (!res.ok) throw await failure(res, "บันทึก");
   return { ...game, updatedAt: Date.now() };
 }
 
+export async function verifyAdmin(adminSecret: string): Promise<boolean> {
+  const res = await fetch(`${API}/admin/check`, { headers: { "x-admin-secret": adminSecret } });
+  if (res.status === 401) return false;
+  if (!res.ok) throw await failure(res, "ตรวจรหัส");
+  return true;
+}
+
+// คืน URL ของรูปบน server (/I-DOJO/api/uploads/<file>) ไว้เก็บแทน base64
+export async function uploadImage(file: Blob, adminSecret: string): Promise<string> {
+  const form = new FormData();
+  const name = file instanceof File ? file.name : "image.jpg";
+  form.append("image", file, name);
+  const res = await fetch(`${API}/upload`, {
+    method: "POST",
+    headers: { "x-admin-secret": adminSecret },
+    body: form,
+  });
+  if (!res.ok) throw await failure(res, "อัปโหลดรูป");
+  const { filename } = await res.json();
+  return `${API}/uploads/${filename}`;
+}
+
+// ชุดตัวอย่าง F1 ให้ editor ใช้เป็นจุดเริ่มเมื่อ server ยังไม่มีข้อมูล
+export function makeDemoGame(): Theme {
+  return { ...fromPayload({}), pairs: seedPairs() };
+}
+
+// ข้อมูลเดิมที่เคยเก็บใน localStorage ของ browser นี้ (ก่อนย้ายไป backend) — ใช้ย้ายขึ้น server ครั้งเดียว
+export function readLegacyLocalGame(): Theme | null {
+  try {
+    const raw = localStorage.getItem(PAIRS_KEY);
+    if (!raw) return null;
+    const pairs = recordsToPairs(JSON.parse(raw));
+    if (pairs.length < 2) return null;
+    const meta = JSON.parse(localStorage.getItem(META_KEY) ?? "{}");
+    return { ...fromPayload(meta), pairs };
+  } catch {
+    return null;
+  }
+}
+
 export function exportGameJson(game: Theme): string {
-  return JSON.stringify(
-    { name: game.name, timeLimitSeconds: game.timeLimitSeconds, pairs: game.pairs.map(toSpecRecord) },
-    null,
-    2,
-  );
+  return JSON.stringify(toPayload(game), null, 2);
 }
 
 function sideComplete(type: PromptType, text: string, image?: string): boolean {

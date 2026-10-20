@@ -26,14 +26,16 @@
 
 - Vite build output: `frontend/` → `../backend/build` (Apache เสิร์ฟจากโฟลเดอร์นี้โดยตรง)
 - `vite.config.ts` ต้องมี `base: '/I-DOJO/'` ไม่งั้น asset (JS/CSS) โหลดไม่ขึ้น
-- `routes.tsx` ใช้ `basename: IS_HOSTED ? '/' : '/I-DOJO'` — โหมด production บน Pi คือ `/I-DOJO`
+- `routes.tsx` ใช้ `basename: '/I-DOJO'` ตายตัว (เลิกรองรับ Netlify แล้ว)
 - การเรียก API ต้องเป็น path แบบ relative ที่ขึ้นต้นด้วย base (เช่น `/I-DOJO/api/...` หรือสร้างจาก `import.meta.env.BASE_URL`)
   **ห้าม hardcode `http://localhost:5000`** เพราะจะชี้ไปเครื่องของคนที่เปิดเว็บ
 
 ## Backend
 
 - Entry: `backend/index.js`
-- ตอนเริ่มจะสร้างตาราง `records` และ `app_config` เองถ้ายังไม่มี
+- ตอนเริ่มจะสร้างตาราง `records`, `app_config` และ `game` เองถ้ายังไม่มี
+- ชุดคำถามของเกมเก็บในตาราง `game` (แถวเดียว, JSON) ผ่าน `GET /api/game` (404 = ยังไม่มี) และ `PUT /api/game`
+- `PUT /api/game`, `POST /api/upload`, `GET /api/admin/check`, `DELETE /api/records` ต้องส่ง header `x-admin-secret` ตรงกับ `ADMIN_SECRET` — ผู้ดูแลกรอกรหัสนี้ในหน้า `/I-DOJO/editor` (ไม่ได้ฝังใน frontend) ถ้า `ADMIN_SECRET` ว่างจะบันทึกไม่ได้เลย
 - Config อยู่ใน `backend/.env` (ไม่ commit, permission `600`, owner `idojo`)
 - ต้องมี `backend/.env.example` ที่ระบุ key ทุกตัวโดยไม่มีค่าจริง
 
@@ -49,9 +51,10 @@ ADMIN_SECRET=
 ```
 
 - ไม่มี `DB_PORT` — โค้ดไม่ได้อ่าน ใช้ default ของ mariadb (3306)
-- `ADMIN_SECRET` ใช้กับ `DELETE /api/records` (header `x-admin-secret`)
+- `ADMIN_SECRET` = รหัสผู้ดูแลสำหรับบันทึกชุดคำถาม/อัปโหลดรูป (ดูข้างบน)
 - ไฟล์ที่อัปโหลดเก็บใน `backend/uploads/` (relative กับ working dir ของ PM2 จึงต้อง `pm2 start` จากใน `backend/`) เปิดได้ที่ `/I-DOJO/api/uploads/<file>`
-- Express ยังเสิร์ฟ `backend/build` ที่ `/I-DOJO` ด้วย (ไว้ทดสอบตรง port 5000 โดยไม่มี Apache) — บน Pi ส่วนนี้ Apache เสิร์ฟเอง
+- Express ยังเสิร์ฟ `backend/build` ที่ `/I-DOJO` ด้วย (ไว้ทดสอบตรง port 5000 โดยไม่มี Apache) และตัด `/I-DOJO` ออกจาก `/I-DOJO/api/...` เองแบบเดียวกับ Apache — บน Pi ส่วนนี้ Apache เสิร์ฟเอง
+- เกมถูกฝังเป็น iframe บนจอ Station ของ portal — **ห้ามเพิ่ม `X-Frame-Options` หรือ CSP `frame-ancestors`** ใน Apache (ดู `PORTAL_INTEGRATION.md`)
 
 ## Apache config
 

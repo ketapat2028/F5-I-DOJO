@@ -5,7 +5,8 @@ import { VideoPlayer } from "../components/VideoPlayer";
 import { Button } from "../components/ui/button";
 import { cn } from "../components/ui/utils";
 import type { MatchPair, PromptType, Theme } from "../types/theme";
-import { getGame } from "../utils/gameStore";
+import { getGame, NoGameError } from "../utils/gameStore";
+import { forwardKeys, isEmbedded, listenPortal, sendResult, type PortalAck, type PortalResult } from "../utils/portalBridge";
 
 type Phase = "idle" | "running" | "finished" | "timeout";
 type Chip = { id: string; text: string; letter: string; type: PromptType; image?: string };
@@ -36,6 +37,11 @@ type ModalData = {
   wrong: WrongItem[];
 };
 type VideoView = { pairIds: string[]; index: number };
+type PortalStatus = "idle" | "sending" | "sent" | "error";
+type PortalReport = { result: PortalResult; score: number };
+
+// portal ไม่ตอบ ack ภายในเวลานี้ = ถือว่ายังไม่ได้บันทึก (PORTAL_INTEGRATION.md ข้อ 2)
+const ACK_TIMEOUT_MS = 10_000;
 
 const DRAG_THRESHOLD = 6;
 const TYPE_BADGE: Record<PromptType, string> = { text: "TEXT", image: "IMAGE", mixed: "MIXED" };
@@ -75,7 +81,7 @@ function resultTier(score: number, total: number): { title: string; sub?: string
 function GameTitle({ name }: { name: string }) {
   const m = name.match(/^(.*\S)\s+RED$/);
   return (
-    <h1 className="f1-font-display text-2xl font-bold text-white">
+    <h1 className="f1-font-display text-2xl font-bold text-f1-ink">
       🏁 {m ? m[1] : name}
       {m && <span className="text-[#DC0000]"> RED</span>}
     </h1>
@@ -94,15 +100,52 @@ export function PlayPage() {
   const [hoverBoxId, setHoverBoxId] = useState<string | null>(null);
   const [modalData, setModalData] = useState<ModalData | null>(null);
   const [videoView, setVideoView] = useState<VideoView | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [portalStatus, setPortalStatus] = useState<PortalStatus>("idle");
+  const [portalMsg, setPortalMsg] = useState<string | null>(null);
 
   const dragRef = useRef<DragInfo | null>(null);
   const justDraggedRef = useRef(false);
+  const embedded = isEmbedded();
+  // ผลที่ส่งแล้วกำลังรอ ack (กันส่งซ้ำ) และผลล่าสุดไว้กด "ส่งใหม่"
+  const pendingRef = useRef<PortalReport | null>(null);
+  const lastReportRef = useRef<PortalReport | null>(null);
+  const ackTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    getGame().then((g) => {
-      setGame(g);
-      setChips(makeChips(g.pairs));
-    });
+    setLoadError(null);
+    getGame()
+      .then((g) => {
+        setGame(g);
+        setChips(makeChips(g.pairs));
+      })
+      .catch((e) => {
+        setLoadError(
+          e instanceof NoGameError
+            ? "ยังไม่มีชุดคำถาม — ให้ผู้ดูแลตั้งค่าที่หน้า /I-DOJO/editor"
+            : `โหลดชุดคำถามไม่ได้${e instanceof Error ? ` (${e.message})` : ""}`,
+        );
+      });
+  }, [loadAttempt]);
+
+  useEffect(() => {
+    function handleAck(ack: PortalAck) {
+      if (!pendingRef.current) return;
+      if (ackTimerRef.current) window.clearTimeout(ackTimerRef.current);
+      pendingRef.current = null;
+      setPortalStatus(ack.ok ? "sent" : "error");
+      setPortalMsg(ack.ok ? null : (ack.message ?? "จอบันทึกผลไม่สำเร็จ"));
+    }
+    const stopListen = listenPortal(handleAck);
+    const stopKeys = forwardKeys();
+    return () => {
+      stopListen();
+      stopKeys();
+      if (ackTimerRef.current) window.clearTimeout(ackTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -121,9 +164,16 @@ export function PlayPage() {
 
   if (!game) {
     return (
-      <div className="f1-carbon-bg min-h-screen">
+      <div className="f1-paper-bg min-h-screen">
         <F1Header />
-        <main className="mx-auto max-w-3xl p-6 text-[#FFD60A]">กำลังโหลด...</main>
+        <main className="f1-font-display mx-auto max-w-3xl space-y-3 p-6 text-f1-red">
+          <p>{loadError ?? "กำลังโหลด..."}</p>
+          {loadError && (
+            <Button className="bg-[#DC0000] text-white hover:bg-[#b00000]" onClick={() => setLoadAttempt((n) => n + 1)}>
+              ลองใหม่
+            </Button>
+          )}
+        </main>
       </div>
     );
   }
@@ -141,8 +191,32 @@ export function PlayPage() {
     setPhase((p) => (p === "idle" ? "running" : p));
   }
 
+  // ส่งผลขึ้นจอ Station เฉพาะตอนถูกฝัง · ระหว่างรอ ack ห้ามส่งซ้ำ
+  function report(next: PortalReport) {
+    if (!embedded || pendingRef.current) return;
+    pendingRef.current = next;
+    lastReportRef.current = next;
+    setPortalStatus("sending");
+    setPortalMsg(null);
+    sendResult(next.result, next.score);
+    ackTimerRef.current = window.setTimeout(() => {
+      pendingRef.current = null;
+      setPortalStatus("error");
+      setPortalMsg("ยังไม่ได้รับการยืนยันจากจอ");
+    }, ACK_TIMEOUT_MS);
+  }
+
+  function resendReport() {
+    if (lastReportRef.current) report(lastReportRef.current);
+  }
+
   function resetAll() {
     if (!game) return;
+    // ผลที่ยังรอ ack อยู่ปล่อยให้รอต่อ ส่วนสถานะอื่นเริ่มใหม่
+    if (!pendingRef.current) {
+      setPortalStatus("idle");
+      setPortalMsg(null);
+    }
     setChips(makeChips(game.pairs));
     setSlots({});
     setSelectedId(null);
@@ -215,8 +289,15 @@ export function PlayPage() {
       timeUsedSeconds: elapsed,
       wrong,
     });
-    if (allCorrect) setPhase("finished");
-    else if (isAuto) setPhase("timeout");
+    // ผิดแต่เวลายังเหลือ = ไม่ส่งผล ให้แก้ต่อจนถูกครบหรือหมดเวลา
+    const pct = Math.round((100 * newLocked.size) / game.pairs.length);
+    if (allCorrect) {
+      setPhase("finished");
+      report({ result: "pass", score: pct });
+    } else if (isAuto) {
+      setPhase("timeout");
+      report({ result: "fail", score: pct });
+    }
   }
 
   function retryWrongOnly() {
@@ -368,13 +449,15 @@ export function PlayPage() {
         onPointerCancel={handleChipPointerCancel}
         onClick={inSlot ? undefined : () => handleBankChipClick(chip)}
         className={cn(
-          "f1-font-display touch-none select-none border-2 bg-[#161616] font-medium text-white shadow-[0_0_0_1px_rgba(220,0,0,0.3)]",
-          isSelected
-            ? "border-[#FFD60A] shadow-[0_0_14px_2px_rgba(255,214,10,0.7)]"
-            : "border-[#DC0000]",
+          "f1-font-display touch-none select-none border-2 font-medium text-f1-ink",
           inSlot
-            ? "flex h-full w-full min-h-0 cursor-grab flex-col items-center justify-center gap-1 rounded-md p-2 text-center text-sm active:cursor-grabbing sm:text-base xl:text-xl"
-            : "flex cursor-pointer items-center gap-2 rounded-sm px-3 py-2 text-sm lg:px-5 lg:py-3 lg:text-lg",
+            ? "border-transparent bg-transparent"
+            : isSelected
+              ? "border-f1-ink bg-f1-card shadow-[0_0_0_3px_rgba(220,0,0,0.55),0_0_16px_2px_rgba(220,0,0,0.35)]"
+              : "border-[#DC0000] bg-f1-card shadow-[0_0_0_1px_rgba(220,0,0,0.3)]",
+          inSlot
+            ? "flex h-full w-full min-h-0 cursor-grab flex-col items-center justify-center gap-1 rounded-md p-2 fit:p-1 text-center text-sm active:cursor-grabbing sm:text-base xl:text-xl fit:text-xs fit:xl:text-sm fit:2xl:text-lg"
+            : "flex cursor-pointer items-center gap-2 rounded-sm px-3 py-2 text-sm lg:px-5 lg:py-3 lg:text-lg fit:px-3 fit:py-1.5 fit:text-sm fit:2xl:text-base",
         )}
       >
         {hasImg && (
@@ -382,11 +465,11 @@ export function PlayPage() {
             src={chip.image}
             alt=""
             draggable={false}
-            className={inSlot ? "min-h-0 w-full flex-1 object-contain" : "h-12 w-16 object-contain lg:h-16 lg:w-24"}
+            className={inSlot ? "min-h-0 w-full flex-1 object-contain" : "h-12 w-16 object-contain lg:h-16 lg:w-24 fit:h-8 fit:w-12 fit:2xl:h-10 fit:2xl:w-16"}
           />
         )}
         <span className={cn("leading-snug", captionClass)}>
-          <span className="mr-1 text-[#FFD60A]">{chip.letter}.</span>
+          <span className="mr-1 text-f1-red">{chip.letter}.</span>
           {chip.text}
         </span>
       </div>
@@ -395,40 +478,38 @@ export function PlayPage() {
 
   function renderQuestion(pair: MatchPair, idx: number) {
     const hasImg = pair.promptType !== "text" && Boolean(pair.promptImage);
-    return (
-      <div
-        className={cn(
-          "relative flex min-w-0 gap-2 rounded-sm border-2 border-[#333] bg-black/70 p-3 lg:p-5",
-          hasImg ? "flex-col items-center justify-center text-center" : "items-center gap-3 lg:gap-4",
-        )}
-      >
-        <span
-          className={cn(
-            "f1-font-mono text-xs text-[#FFD60A] lg:text-base",
-            hasImg && "absolute left-3 top-2 lg:left-5 lg:top-3",
-          )}
-        >
-          {idx + 1}
-        </span>
-        <span className="f1-font-mono absolute right-2 top-2 rounded-sm border border-[#333] px-1.5 py-0.5 text-[10px] text-[#FFD60A]">
-          {TYPE_BADGE[pair.promptType]}
-        </span>
-        {hasImg && (
+    if (hasImg) {
+      return (
+        <div className="relative flex min-w-0 aspect-[3/1] overflow-hidden rounded-sm border-2 border-f1-line border-l-[6px] border-l-[#DC0000] bg-zinc-200 shadow-sm fit:aspect-auto fit:h-full fit:min-h-0 fit:flex-1">
           <img
             src={pair.promptImage}
-            alt=""
+            alt={pair.promptText}
             draggable={false}
-            className="mt-4 min-h-0 w-full flex-1 rounded-sm object-contain lg:max-h-36"
+            className="absolute inset-0 h-full w-full object-cover"
           />
-        )}
-        <span
-          className={cn(
-            "f1-font-display min-w-0 break-words font-bold text-white lg:text-2xl",
-            !hasImg && "flex-1",
-            pair.promptType === "image" && "text-sm font-medium text-[#bbb] lg:text-base",
-            pair.promptType === "mixed" && "text-base lg:text-xl",
+          <span className="f1-font-mono absolute left-2 top-2 rounded-sm bg-white/90 px-1.5 py-0.5 text-xs font-bold text-f1-red lg:text-sm">
+            {idx + 1}
+          </span>
+          <span className="f1-font-mono absolute right-2 top-2 rounded-sm border border-f1-line bg-white/90 px-1.5 py-0.5 text-[10px] text-f1-ink-2">
+            {TYPE_BADGE[pair.promptType]}
+          </span>
+          {pair.promptText && (
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 pb-2 pt-8 fit:pt-5">
+              <span className="f1-font-display break-words text-base font-bold leading-tight text-white lg:text-xl fit:text-sm fit:2xl:text-xl">
+                {pair.promptText}
+              </span>
+            </div>
           )}
-        >
+        </div>
+      );
+    }
+    return (
+      <div className="relative flex min-w-0 items-center gap-3 rounded-sm border-2 border-f1-line border-l-[6px] border-l-[#DC0000] bg-white p-3 shadow-sm lg:gap-4 lg:p-5 fit:h-full fit:min-h-0 fit:flex-1 fit:overflow-hidden fit:p-2 fit:2xl:p-4">
+        <span className="f1-font-mono text-xs text-f1-red lg:text-base fit:shrink-0">{idx + 1}</span>
+        <span className="f1-font-mono absolute right-2 top-2 rounded-sm border border-f1-line px-1.5 py-0.5 text-[10px] text-f1-red">
+          {TYPE_BADGE[pair.promptType]}
+        </span>
+        <span className="f1-font-display min-w-0 flex-1 break-words font-bold text-f1-ink lg:text-2xl fit:text-lg fit:2xl:text-2xl">
           {pair.promptText}
         </span>
       </div>
@@ -437,85 +518,108 @@ export function PlayPage() {
 
   const videoPair = videoView ? game.pairs.find((p) => p.id === videoView.pairIds[videoView.index]) : undefined;
   const hasNextVideo = videoView ? videoView.index < videoView.pairIds.length - 1 : false;
-  const sectionTitle = "f1-font-display text-lg font-bold tracking-wide text-white";
-  const rowGrid = "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-3 lg:gap-6";
+  const sectionTitle = "f1-font-display text-lg font-bold tracking-wide text-f1-ink fit:text-sm";
+  const rowGrid =
+    "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-3 lg:gap-6 fit:flex fit:h-full fit:min-h-0 fit:gap-3";
   const tier = modalData ? resultTier(modalData.score, modalData.total) : null;
+  const howToList = (
+    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+      {(
+        [
+          ["L", "ซ้าย = คำถาม (คงที่ อ่านอย่างเดียว)"],
+          ["R", "ขวา = ช่องคำตอบ (วางคำตอบที่นี่)"],
+          ["1", "คลิกเลือกคำตอบใน คลังคำตอบ • PIT BANK (การ์ดที่เลือกจะมีขอบสีเหลือง)"],
+          ["2", "คลิกช่องคำตอบทางขวาที่ต้องการวาง (หรือลากการ์ดไปวางก็ได้)"],
+          ["3", "คลิกการ์ดเดิมซ้ำเพื่อยกเลิก • คลิกช่องที่มีคำตอบแล้วเพื่อแทนที่ • กด ✕ เพื่อเอาคำตอบออก"],
+          ["4", "ใส่ให้ครบทุกช่อง แล้วกด ตรวจสอบคำตอบ"],
+        ] as const
+      ).map(([k, v]) => (
+        <div key={k} className="contents">
+          <dt className="f1-font-mono flex h-6 w-6 items-center justify-center rounded-sm bg-[#DC0000] text-xs font-bold">
+            {k}
+          </dt>
+          <dd className="self-center">{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
 
   return (
-    <div className="f1-carbon-bg min-h-screen pb-16">
+    // ตอนถูกฝัง portal วางปุ่ม "ผ่านสถานี" ทับขอบล่าง ~90px จึงเว้นที่ไว้
+    <div
+      className={cn(
+        "f1-paper-bg min-h-screen fit:flex fit:h-dvh fit:flex-col fit:overflow-y-auto fit:pb-0",
+        embedded ? "pb-28" : "pb-16",
+      )}
+    >
       <F1Header />
-      <main className="w-full space-y-4 px-6 py-6 lg:px-12">
-        <div>
-          <GameTitle name={game.name} />
-          <p className="f1-font-display mt-1 text-sm font-medium tracking-widest text-[#FFD60A]">
-            LEFT Q • RIGHT A — QUESTION LEFT • ANSWER RIGHT • MATCH
-          </p>
-        </div>
-
-        <div className="f1-font-mono flex flex-wrap items-center gap-x-4 gap-y-1 rounded-sm border-2 border-[#DC0000] bg-black/70 px-4 py-3">
-          <div className="flex items-baseline gap-2">
-            <span className="text-xs text-[#FFD60A]">⏱ TIME</span>
-            <span
-              className={cn(
-                "text-2xl font-bold text-white",
-                lowTime && phase === "running" && "f1-timer-blink text-[#DC0000]",
-              )}
-            >
-              {remaining !== null ? formatTime(remaining) : formatTime(elapsed)}
-            </span>
+      <main className="flex w-full flex-col gap-4 px-6 py-6 lg:px-12 fit:min-h-0 fit:flex-1 fit:gap-2 fit:px-8 fit:py-2">
+        <div className="flex flex-col gap-4 fit:flex-row fit:items-center fit:gap-4">
+          <div className="fit:shrink-0">
+            <GameTitle name={game.name} />
+            <p className="f1-font-display mt-1 text-sm font-medium tracking-widest text-f1-red fit:mt-0 fit:text-xs">
+              LEFT Q • RIGHT A — QUESTION LEFT • ANSWER RIGHT • MATCH
+            </p>
           </div>
-          <p className="f1-font-display text-sm text-[#FFD60A]">
-            · สถานะ:{" "}
-            <strong className="text-white">
-              {filledCount}/{total} ช่อง • {pool.length} ตัวเลือกเหลือ
-            </strong>
-          </p>
-        </div>
 
-        {remaining !== null && (
-          <div className="h-2 w-full overflow-hidden rounded-full bg-[#1a1a1a]">
-            <div
-              className={cn(
-                "h-full rounded-full bg-[#DC0000] transition-all",
-                lowTime && phase === "running" && "f1-timer-blink",
-              )}
-              style={{ width: `${(remaining / game.timeLimitSeconds) * 100}%` }}
-            />
-          </div>
-        )}
-
-        <div className="f1-font-display rounded-sm border border-[#333] bg-black/60 p-4 text-sm text-white">
-          <h2 className="mb-2 font-bold text-[#FFD60A]">📋 วิธีเล่น (แบบคลิก)</h2>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-            {(
-              [
-                ["L", "ซ้าย = คำถาม (คงที่ อ่านอย่างเดียว)"],
-                ["R", "ขวา = ช่องคำตอบ (วางคำตอบที่นี่)"],
-                ["1", "คลิกเลือกคำตอบใน คลังคำตอบ • PIT BANK (การ์ดที่เลือกจะมีขอบสีเหลือง)"],
-                ["2", "คลิกช่องคำตอบทางขวาที่ต้องการวาง (หรือลากการ์ดไปวางก็ได้)"],
-                ["3", "คลิกการ์ดเดิมซ้ำเพื่อยกเลิก • คลิกช่องที่มีคำตอบแล้วเพื่อแทนที่ • กด ✕ เพื่อเอาคำตอบออก"],
-                ["4", "ใส่ให้ครบทุกช่อง แล้วกด ตรวจสอบคำตอบ"],
-              ] as const
-            ).map(([k, v]) => (
-              <div key={k} className="contents">
-                <dt className="f1-font-mono flex h-6 w-6 items-center justify-center rounded-sm bg-[#DC0000] text-xs font-bold">
-                  {k}
-                </dt>
-                <dd className="self-center">{v}</dd>
+          <div className="flex flex-col gap-2 fit:flex-1">
+            <div className="f1-font-mono flex flex-wrap items-center gap-x-4 gap-y-1 rounded-sm border-2 border-[#DC0000] bg-f1-ink px-4 py-3 fit:py-1.5">
+              <div className="flex items-baseline gap-2">
+                <span className="text-xs text-zinc-400">⏱ TIME</span>
+                <span
+                  className={cn(
+                    "text-2xl font-bold text-white",
+                    lowTime && phase === "running" && "f1-timer-blink text-f1-red-bright",
+                  )}
+                >
+                  {remaining !== null ? formatTime(remaining) : formatTime(elapsed)}
+                </span>
               </div>
-            ))}
-          </dl>
+              <p className="f1-font-display text-sm text-zinc-300">
+                · สถานะ:{" "}
+                <strong className="text-white">
+                  {filledCount}/{total} ช่อง • {pool.length} ตัวเลือกเหลือ
+                </strong>
+              </p>
+            </div>
+
+            {remaining !== null && (
+              <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-300">
+                <div
+                  className={cn(
+                    "h-full rounded-full bg-[#DC0000] transition-all",
+                    lowTime && phase === "running" && "f1-timer-blink",
+                  )}
+                  style={{ width: `${(remaining / game.timeLimitSeconds) * 100}%` }}
+                />
+              </div>
+            )}
+          </div>
+
+          <Button
+            variant="outline"
+            onClick={() => setShowHelp(true)}
+            className="f1-font-display hidden shrink-0 border-f1-ink bg-white text-f1-ink hover:bg-zinc-100 fit:inline-flex"
+          >
+            📋 วิธีเล่น
+          </Button>
+        </div>
+
+        <div className="f1-font-display rounded-sm border border-f1-line bg-white p-4 text-sm text-f1-ink fit:hidden">
+          <h2 className="mb-2 font-bold text-f1-red">📋 วิธีเล่น (แบบคลิก)</h2>
+          {howToList}
         </div>
 
         <h2 className={sectionTitle}>📝 คำถาม • QUESTION ⟷ ✅ คำตอบ • ANSWER</h2>
 
-        <div className="grid gap-x-12 gap-y-4 xl:grid-cols-2">
+        <div className="grid gap-x-12 gap-y-4 xl:grid-cols-2 fit:min-h-0 fit:max-h-[calc(0.675*(100vw_-_88px)_+_24px)] fit:flex-1 fit:grid-cols-2 fit:grid-rows-4 fit:gap-x-6 fit:gap-y-2">
           {[0, 1].map((n) => (
             <div
               key={n}
               className={cn(
-                "f1-font-display grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-3 px-1 text-xs font-medium tracking-wide text-[#FFD60A] lg:gap-6",
+                "f1-font-display grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-3 px-1 text-xs font-medium tracking-wide text-f1-red lg:gap-6",
                 n === 1 && "hidden xl:grid",
+                "fit:hidden!",
               )}
             >
               <span># · 📝 คำถาม (ซ้าย)</span>
@@ -531,23 +635,24 @@ export function PlayPage() {
             return (
               <div key={pair.id} className={rowGrid}>
                 {renderQuestion(pair, idx)}
-                <span className="f1-font-mono self-center text-[#FFD60A]">⟷</span>
-                <div className="relative">
+                <span className="f1-font-mono self-center text-f1-red fit:shrink-0">⟷</span>
+                <div className="relative fit:aspect-video fit:h-full fit:shrink-0">
                   <div
                     data-dropbox-id={pair.id}
                     onClick={() => handleSlotClick(pair.id)}
                     className={cn(
-                      "flex aspect-video w-full items-center justify-center rounded-xl border-4 border-dashed border-[#333] bg-[#111] text-sm transition-colors",
-                      selectedId && !isLocked && "cursor-pointer border-[#FFD60A]/50",
-                      isLocked && "f1-correct-bounce border-solid border-[#22C55E] bg-green-950/40",
+                      "flex aspect-video w-full items-center justify-center fit:aspect-auto fit:h-full rounded-xl border-4 border-dashed border-[#8B8B95] bg-white/70 text-sm transition-colors",
+                      occupantChip && "border-solid border-f1-ink bg-white",
+                      selectedId && !isLocked && "f1-slot-blink cursor-pointer",
+                      isLocked && "f1-correct-bounce border-solid border-[#15803D] bg-f1-ok-bg",
                       !isLocked && isWrong && "f1-shake border-solid border-[#DC0000] bg-[#DC0000]/10",
-                      !isLocked && !isWrong && hoverBoxId === pair.id && "border-[#FFD60A] bg-[#222]",
+                      !isLocked && !isWrong && hoverBoxId === pair.id && "border-[#DC0000] bg-[#DC0000]/10",
                     )}
                   >
                     {occupantChip ? (
                       renderChip(occupantChip, true)
                     ) : (
-                      <span className="f1-font-mono text-xs text-[#555]">___</span>
+                      <span className="f1-font-mono text-xs text-[#8B8B95]">___</span>
                     )}
                   </div>
                   {occupantChip && !isLocked && !locked && (
@@ -572,34 +677,37 @@ export function PlayPage() {
           })}
         </div>
 
-        <h2 className={sectionTitle}>📦 คลังคำตอบ • PIT BANK</h2>
-        <p className="f1-font-display -mt-2 text-sm text-[#bbb]">คลิกเลือก → แล้วคลิกช่องในคอลัมน์ขวา</p>
+        <div className="flex flex-col gap-2 fit:flex-row fit:items-baseline fit:gap-3">
+          <h2 className={sectionTitle}>📦 คลังคำตอบ • PIT BANK</h2>
+          <p className="f1-font-display text-sm text-f1-mute fit:text-xs">คลิกเลือก → แล้วคลิกช่องในคอลัมน์ขวา</p>
+        </div>
 
-        <div className="min-h-20 flex flex-wrap gap-2 rounded-sm border-t-4 border-[#DC0000] bg-black/70 p-4 lg:gap-4 lg:p-6">
+        <div className="min-h-20 flex flex-wrap gap-2 rounded-sm border-t-4 border-[#DC0000] bg-white/90 p-4 lg:gap-4 lg:p-6 fit:min-h-[7.75rem] fit:min-[1700px]:min-h-[4.75rem] fit:gap-2 fit:p-2">
           {pool.length === 0 && phase !== "finished" && (
-            <span className="f1-font-display text-sm text-[#555]">คลังว่าง — ใส่ครบทุกช่องแล้ว</span>
+            <span className="f1-font-display text-sm text-[#8B8B95]">คลังว่าง — ใส่ครบทุกช่องแล้ว</span>
           )}
           {pool.map((chip) => renderChip(chip))}
         </div>
 
-        <h2 className={sectionTitle}>🚦 RACE CONTROL • ตรวจคำตอบ</h2>
+        <div className="flex flex-col gap-4 fit:flex-row fit:items-center fit:gap-4">
+        <h2 className={cn(sectionTitle, "fit:shrink-0")}>🚦 RACE CONTROL • ตรวจคำตอบ</h2>
 
-        <div className="flex flex-col items-center gap-3">
+        <div className="flex flex-col items-center gap-3 fit:contents">
           {!locked && (
-            <p className="f1-font-display text-center text-sm text-[#FFD60A]">
+            <p className="f1-font-display text-center text-sm text-f1-red fit:flex-1 fit:text-left fit:text-xs fit:2xl:text-sm">
               {isAllFilled
                 ? "ครบแล้ว! กดตรวจสอบได้เลย"
                 : `⚠️ ใส่ให้ครบ ${total} ช่องก่อนส่ง (ตอนนี้ ${filledCount}/${total}) – คลิกคำตอบในคลังแล้วคลิกช่องทางขวา`}
             </p>
           )}
-          <div className="flex flex-wrap justify-center gap-2">
+          <div className="flex flex-wrap justify-center gap-2 fit:ml-auto fit:shrink-0">
             {!locked && (
               <Button
                 disabled={!isAllFilled}
                 onClick={() => handleCheck(false)}
                 className={cn(
                   "f1-font-display",
-                  isAllFilled ? "f1-glow bg-red-600 text-white hover:bg-red-700" : "bg-gray-600 text-gray-300",
+                  isAllFilled ? "f1-glow bg-red-600 text-white hover:bg-red-700" : "bg-zinc-200 text-zinc-500",
                 )}
               >
                 🏁 ตรวจสอบคำตอบ (CHECK)
@@ -608,7 +716,7 @@ export function PlayPage() {
             {!locked && (
               <Button
                 variant="outline"
-                className="f1-font-display border-[#333] bg-transparent text-white hover:bg-white/10"
+                className="f1-font-display border-f1-line-strong bg-white text-f1-ink hover:bg-zinc-100"
                 onClick={clearAnswers}
               >
                 ล้างคำตอบ
@@ -616,28 +724,57 @@ export function PlayPage() {
             )}
             <Button
               variant="outline"
-              className="f1-font-display border-[#DC0000] bg-transparent text-white hover:bg-[#DC0000]/20"
+              className="f1-font-display border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
               onClick={resetAll}
             >
               รีเซ็ตทั้งหมด
             </Button>
           </div>
         </div>
+        </div>
 
-        <div className="f1-font-display space-y-1 pt-4 text-xs text-[#777]">
+        <div className="f1-font-display space-y-1 pt-4 text-xs text-f1-mute fit:flex fit:justify-between fit:gap-6 fit:space-y-0 fit:overflow-hidden fit:whitespace-nowrap fit:pt-0 fit:text-[10px]">
           <p>
             * ซ้าย = คำถามคงที่ • ขวา = คำตอบ • คลิกเลือกจากคลังล่างแล้วคลิกช่องที่จะวาง • หากผิด
-            ระบบจะแนะนำวิดีโอสอนเฉพาะข้อที่ผิด • No API • Local Only • 5min Timer
+            ระบบจะแนะนำวิดีโอสอนเฉพาะข้อที่ผิด
           </p>
           <p>I-DOJO F1 RACING RED • LEFT QUESTION • RIGHT ANSWER • FERRARI RED #DC0000 • GREEN #22C55E</p>
         </div>
       </main>
 
+      {showHelp && (
+        <div
+          className="fixed inset-0 z-[65] flex items-center justify-center overflow-y-auto bg-black/60 p-4"
+          onClick={() => setShowHelp(false)}
+        >
+          <div
+            className="f1-font-display relative my-auto w-full max-w-xl rounded-sm border-4 border-[#DC0000] bg-white p-6 text-sm text-f1-ink"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setShowHelp(false)}
+              className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-[#DC0000] font-bold text-white"
+              aria-label="ปิดวิธีเล่น"
+            >
+              ✕
+            </button>
+            <h2 className="mb-3 font-bold text-f1-red">📋 วิธีเล่น (แบบคลิก)</h2>
+            {howToList}
+          </div>
+        </div>
+      )}
+
       {modalData?.allCorrect && <Confetti />}
 
       {modalData && tier && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/80 p-4">
-          <div className="f1-font-display relative my-auto w-full max-w-lg rounded-sm border-4 border-[#DC0000] bg-[#111] p-6 text-white">
+        <div
+          className={cn(
+            "fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/60 p-4",
+            embedded && "pb-28",
+          )}
+        >
+          <div className="f1-font-display relative my-auto w-full max-w-lg rounded-sm border-4 border-[#DC0000] bg-white p-6 text-f1-ink">
             <button
               type="button"
               onClick={() => setModalData(null)}
@@ -646,47 +783,69 @@ export function PlayPage() {
             >
               ✕
             </button>
-            <p className="px-6 text-center text-xs font-medium tracking-widest text-[#FFD60A]">
+            <p className="px-6 text-center text-xs font-medium tracking-widest text-f1-red">
               🏆 RACE RESULT • SUMMARY
             </p>
             <p className="mt-1 px-6 text-center text-2xl font-bold">
               {modalData.isTimeout && "⏰ หมดเวลา! "}
               {tier.title}
             </p>
-            {tier.sub && <p className="mt-1 text-center text-sm text-[#FFD60A]">{tier.sub}</p>}
+            {tier.sub && <p className="mt-1 text-center text-sm text-f1-red">{tier.sub}</p>}
+
+            {embedded && portalStatus !== "idle" && (
+              <div
+                className={cn(
+                  "mt-3 flex flex-wrap items-center justify-center gap-2 rounded-sm px-3 py-2 text-center text-sm",
+                  portalStatus === "sending" && "bg-black/60 text-[#FFD60A]",
+                  portalStatus === "sent" && "bg-green-950/60 text-green-300",
+                  portalStatus === "error" && "bg-red-950/60 text-red-300",
+                )}
+              >
+                {portalStatus === "sending" && "📡 กำลังส่งผลไปที่จอ…"}
+                {portalStatus === "sent" && "✓ ส่งผลไปที่จอแล้ว"}
+                {portalStatus === "error" && (
+                  <>
+                    <span>ส่งผลไม่สำเร็จ: {portalMsg}</span>
+                    <Button size="sm" className="bg-[#DC0000] text-white hover:bg-[#b00000]" onClick={resendReport}>
+                      ส่งใหม่
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
 
             <div className="f1-font-mono mt-4 grid grid-cols-3 gap-2 text-center text-sm">
-              <div className="rounded-sm bg-black/60 p-2">
-                <p className="text-[10px] text-[#FFD60A]">TIME USED</p>
+              <div className="rounded-sm bg-zinc-100 p-2">
+                <p className="text-[10px] text-f1-red">TIME USED</p>
                 <p className="text-lg font-bold">{formatTime(modalData.timeUsedSeconds)}</p>
               </div>
-              <div className="rounded-sm bg-black/60 p-2">
-                <p className="text-[10px] text-[#FFD60A]">CORRECT</p>
+              <div className="rounded-sm bg-zinc-100 p-2">
+                <p className="text-[10px] text-f1-red">CORRECT</p>
                 <p className="text-lg font-bold">
                   {modalData.score}/{modalData.total}
                 </p>
               </div>
-              <div className="rounded-sm bg-black/60 p-2">
-                <p className="text-[10px] text-[#FFD60A]">ACCURACY</p>
+              <div className="rounded-sm bg-zinc-100 p-2">
+                <p className="text-[10px] text-f1-red">ACCURACY</p>
                 <p className="text-lg font-bold">{Math.round((modalData.score / modalData.total) * 100)}%</p>
               </div>
             </div>
 
             {modalData.wrong.length > 0 && (
               <>
-                <p className="mt-4 text-center font-bold text-red-300">
+                <p className="mt-4 text-center font-bold text-f1-bad">
                   มีคำตอบผิด! {modalData.wrong.length} ข้อ
                 </p>
                 <div className="mt-2 max-h-[40vh] space-y-3 overflow-y-auto pr-1">
                   {modalData.wrong.map((w) => {
                     const pair = game.pairs.find((p) => p.id === w.pairId);
                     return (
-                      <div key={w.pairId} className="space-y-2 rounded-sm border border-[#333] bg-black/60 p-3">
+                      <div key={w.pairId} className="space-y-2 rounded-sm border border-f1-line bg-zinc-100 p-3">
                         <h4 className="font-bold">🏷️ {w.topic}</h4>
-                        <p className="rounded-sm bg-red-950/60 px-2 py-1 text-sm text-red-300">
+                        <p className="rounded-sm border border-red-200 bg-f1-bad-bg px-2 py-1 text-sm text-f1-bad">
                           ❌ {w.yourAnswer ?? "(ยังไม่ได้ใส่)"}
                         </p>
-                        <p className="rounded-sm bg-green-950/60 px-2 py-1 text-sm text-green-300">
+                        <p className="rounded-sm border border-green-200 bg-f1-ok-bg px-2 py-1 text-sm text-f1-ok-ink">
                           ✅ {w.correctAnswer}
                         </p>
                         {w.hasVideo && (
@@ -708,7 +867,7 @@ export function PlayPage() {
             <div className="mt-5 flex justify-center gap-2">
               <Button
                 variant="outline"
-                className="border-[#DC0000] bg-transparent text-white hover:bg-[#DC0000]/20"
+                className="border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
                 onClick={resetAll}
               >
                 เล่นใหม่
@@ -725,7 +884,7 @@ export function PlayPage() {
 
       {videoPair?.videoUrl && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-black/90 p-4">
-          <div className="f1-font-display relative my-auto w-full max-w-2xl rounded-sm border-4 border-[#DC0000] bg-[#111] p-4 text-white">
+          <div className="f1-font-display relative my-auto w-full max-w-2xl rounded-sm border-4 border-[#DC0000] bg-white p-4 text-f1-ink">
             <button
               type="button"
               onClick={() => setVideoView(null)}
@@ -736,18 +895,18 @@ export function PlayPage() {
             </button>
             <VideoPlayer url={videoPair.videoUrl} className="mt-6" />
             <h3 className="mt-3 text-lg font-bold">{videoPair.videoTitle || videoPair.promptText}</h3>
-            {videoPair.videoDesc && <p className="mt-1 text-sm text-[#bbb]">{videoPair.videoDesc}</p>}
+            {videoPair.videoDesc && <p className="mt-1 text-sm text-f1-mute">{videoPair.videoDesc}</p>}
             <div className="mt-4 flex justify-end gap-2">
               <Button
                 variant="outline"
-                className="border-[#DC0000] bg-transparent text-white hover:bg-[#DC0000]/20"
+                className="border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
                 onClick={() => setVideoView(null)}
               >
                 เข้าใจแล้ว ✓
               </Button>
               {hasNextVideo && videoView && (
                 <Button
-                  className="bg-[#FFD60A] text-black hover:bg-[#e6c000]"
+                  className="bg-f1-ink text-white hover:bg-zinc-700"
                   onClick={() => setVideoView({ ...videoView, index: videoView.index + 1 })}
                 >
                   ข้อต่อไป →

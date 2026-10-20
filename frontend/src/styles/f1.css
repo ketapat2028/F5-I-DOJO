@@ -1,8 +1,73 @@
+@custom-variant fit (@media (min-width: 1024px) and (min-height: 620px));
+
+/* Palette: white / grey / black carry the surfaces and text, red is the single brand + action colour,
+   green is reserved for "answer correct". Contrast: ink on card 18.9, red on card 5.2, mute on card 5.3. */
+@theme {
+  --color-f1-red: #dc0000;
+  --color-f1-red-dark: #b00000;
+  --color-f1-red-bright: #ff3b3b;
+  --color-f1-ink: #111113;
+  --color-f1-ink-2: #3f3f46;
+  --color-f1-mute: #6b6b75;
+  --color-f1-paper: #f6f6f7;
+  --color-f1-panel: #ededef;
+  --color-f1-card: #ffffff;
+  --color-f1-line: #d4d4d8;
+  --color-f1-line-strong: #8b8b95;
+  --color-f1-ok-ink: #166534;
+  --color-f1-ok-bg: #f0fdf4;
+  --color-f1-bad: #991b1b;
+  --color-f1-bad-bg: #fef2f2;
+}
+
 .f1-carbon-bg {
   background-color: #0a0a0a;
   background-image:
     repeating-linear-gradient(45deg, #151515 0, #151515 2px, #0a0a0a 2px, #0a0a0a 8px),
     repeating-linear-gradient(-45deg, #151515 0, #151515 2px, #0a0a0a 2px, #0a0a0a 8px);
+}
+
+.f1-paper-bg {
+  position: relative;
+  isolation: isolate;
+  background-color: #f6f6f7;
+  color: #111113;
+}
+/* chequered flag in the bottom-left corner, faded out */
+.f1-paper-bg::before {
+  content: "";
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  width: min(34vw, 420px);
+  height: min(24vh, 170px);
+  background: repeating-conic-gradient(#111113 0 25%, transparent 0 50%) 0 0 / 34px 34px;
+  opacity: 0.1;
+  -webkit-mask-image: linear-gradient(60deg, #000 0%, transparent 72%);
+  mask-image: linear-gradient(60deg, #000 0%, transparent 72%);
+  pointer-events: none;
+  z-index: -1;
+}
+/* red / black speed streaks sweeping in from the top-right */
+.f1-paper-bg::after {
+  content: "";
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(52vw, 760px);
+  height: min(46vh, 380px);
+  background: linear-gradient(
+    200deg,
+    transparent 0 46%,
+    rgba(220, 0, 0, 0.13) 46% 49%,
+    transparent 49% 53%,
+    rgba(17, 17, 19, 0.09) 53% 55%,
+    transparent 55% 58%,
+    rgba(220, 0, 0, 0.07) 58% 59.5%,
+    transparent 59.5%
+  );
+  pointer-events: none;
+  z-index: -1;
 }
 
 .f1-font-display {
@@ -67,7 +132,7 @@
   100% { background-position: -200px 0; }
 }
 .f1-dragging {
-  background-image: repeating-linear-gradient(90deg, rgba(220,0,0,0.6) 0 2px, transparent 2px 14px);
+  background-image: repeating-linear-gradient(90deg, rgba(220,0,0,0.45) 0 2px, transparent 2px 14px);
   animation: f1-speedlines 0.3s linear infinite;
 }
 
@@ -91,4 +156,27 @@
   animation-name: f1-confetti-fall;
   animation-timing-function: linear;
   animation-fill-mode: both;
+}
+
+@keyframes f1-slot-blink {
+  0%, 100% {
+    border-color: #dc0000;
+    background-color: rgba(220, 0, 0, 0.1);
+    box-shadow: 0 0 14px 2px rgba(220, 0, 0, 0.35);
+  }
+  50% {
+    border-color: #8b8b95;
+    background-color: rgba(255, 255, 255, 0.7);
+    box-shadow: none;
+  }
+}
+.f1-slot-blink {
+  animation: f1-slot-blink 0.9s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .f1-slot-blink {
+    animation: none;
+    border-color: #dc0000;
+    background-color: rgba(220, 0, 0, 0.1);
+  }
 }
