@@ -35,7 +35,7 @@
 - Entry: `backend/index.js`
 - ตอนเริ่มจะสร้างตาราง `records`, `app_config` และ `game` เองถ้ายังไม่มี
 - ชุดคำถามของเกมเก็บในตาราง `game` (แถวเดียว, JSON) ผ่าน `GET /api/game` (404 = ยังไม่มี) และ `PUT /api/game`
-- `PUT /api/game`, `POST /api/upload`, `GET /api/admin/check`, `DELETE /api/records` ต้องส่ง header `x-admin-secret` ตรงกับ `ADMIN_SECRET` — ผู้ดูแลกรอกรหัสนี้ในหน้า `/I-DOJO/editor` (ไม่ได้ฝังใน frontend) ถ้า `ADMIN_SECRET` ว่างจะบันทึกไม่ได้เลย
+- `PUT /api/game`, `POST /api/upload`, `POST /api/upload-video`, `GET /api/admin/check`, `POST`/`DELETE /api/records`, `POST /api/app-config` ต้องส่ง header `x-admin-secret` ตรงกับ `ADMIN_SECRET` — ผู้ดูแลกรอกรหัสนี้ในหน้า `/I-DOJO/editor` (ไม่ได้ฝังใน frontend) ถ้า `ADMIN_SECRET` ว่างจะบันทึกไม่ได้เลย
 - Config อยู่ใน `backend/.env` (ไม่ commit, permission `600`, owner `idojo`)
 - ต้องมี `backend/.env.example` ที่ระบุ key ทุกตัวโดยไม่มีค่าจริง
 
@@ -52,7 +52,11 @@ ADMIN_SECRET=
 
 - ไม่มี `DB_PORT` — โค้ดไม่ได้อ่าน ใช้ default ของ mariadb (3306)
 - `ADMIN_SECRET` = รหัสผู้ดูแลสำหรับบันทึกชุดคำถาม/อัปโหลดรูป (ดูข้างบน)
-- ไฟล์ที่อัปโหลดเก็บใน `backend/uploads/` (relative กับ working dir ของ PM2 จึงต้อง `pm2 start` จากใน `backend/`) เปิดได้ที่ `/I-DOJO/api/uploads/<file>`
+- ไฟล์ที่อัปโหลดเก็บใน `backend/uploads/` (อ้างจากที่อยู่ของ `index.js` ไม่ขึ้นกับว่า `pm2 start` จากโฟลเดอร์ไหน) เปิดได้ที่ `/I-DOJO/api/uploads/<file>` (รองรับ Range — เลื่อนวิดีโอได้)
+  - รูป: `POST /api/upload` (field `image`) `.jpg .jpeg .png .gif .webp` ไม่เกิน 10MB
+  - วิดีโอสอน: `POST /api/upload-video` (field `video`) `.mp4 .webm` ไม่เกิน 200MB — **ไม่รองรับ YouTube** (Pi/จอ Station ไม่มีเน็ต) · เผื่อพื้นที่ SD card ของ Pi ให้พอ
+  - ไฟล์ผิดชนิด/ใหญ่เกินได้ 400 JSON `{error}` ภาษาไทย
+  - ทุกครั้งที่ `PUT /api/game` สำเร็จ จะลบไฟล์ใน `uploads/` ที่ชุดคำถามไม่ได้อ้างแล้วและเก่ากว่า 1 ชม. (เว้น dotfile เช่น `.gitkeep`) — อย่าเอาไฟล์อื่นมาวางในโฟลเดอร์นี้
 - Express ยังเสิร์ฟ `backend/build` ที่ `/I-DOJO` ด้วย (ไว้ทดสอบตรง port 5000 โดยไม่มี Apache) และตัด `/I-DOJO` ออกจาก `/I-DOJO/api/...` เองแบบเดียวกับ Apache — บน Pi ส่วนนี้ Apache เสิร์ฟเอง
 - เกมถูกฝังเป็น iframe บนจอ Station ของ portal — **ห้ามเพิ่ม `X-Frame-Options` หรือ CSP `frame-ancestors`** ใน Apache (ดู `PORTAL_INTEGRATION.md`)
 

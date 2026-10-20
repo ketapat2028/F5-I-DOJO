@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- อัปโหลดวิดีโอสอน .mp4/.webm (ไม่เกิน 200MB) ขึ้น Pi จาก editor ผ่าน `POST /api/upload-video` — ปุ่ม "📁 เลือกวิดีโอจากเครื่อง"
+- ลบไฟล์ใน `backend/uploads` ที่ชุดคำถามไม่ใช้แล้วอัตโนมัติตอนบันทึก (เว้นไฟล์ที่อัปโหลดไม่ถึง 1 ชม.)
 - เชื่อมเกมกับจอ Station ของ I-Dojo LPB portal ตาม `PORTAL_INTEGRATION.md`: `utils/portalBridge.ts` ส่งผล `pass` เมื่อถูกครบ / `fail` เมื่อหมดเวลา (ผิดแต่เวลาเหลือไม่ส่ง) กันส่งซ้ำระหว่างรอ ack (10 วิ) แสดงสถานะ "กำลังส่งผล / ส่งผลแล้ว / ส่งไม่สำเร็จ [ส่งใหม่]" ใน modal ผล และส่งต่อปุ่ม Enter/Space ของวิทยากร — ทำงานเฉพาะตอนถูกฝังใน iframe
 - route `GET/PUT /api/game` + ตาราง `game` เก็บชุดคำถามที่ backend และ `GET /api/admin/check` ให้ editor ตรวจรหัส
 - หน้า editor ถามรหัสผู้ดูแลก่อนแก้ (เก็บใน sessionStorage) · ถ้า server ยังไม่มีชุดคำถาม ดึงข้อมูลเดิมจาก localStorage ของเครื่องนั้นมาให้ย้ายขึ้น server หรือเริ่มจากชุดตัวอย่าง F1
@@ -11,6 +13,9 @@
 - เพิ่ม `DEPLOYMENT.md` อธิบายสภาพ production บน Raspberry Pi (Apache + PM2 + MariaDB)
 
 ### Changed
+- ตอนถูกฝังบนจอ Station: นาฬิกาเริ่มนับทันทีที่โหลดเกม · ตั้งไม่จำกัดเวลา (0) จะใช้ 5 นาทีแทน ทำให้มีผล fail ส่งไปจอเสมอ · editor แสดงหมายเหตุนี้ใต้ช่องจำกัดเวลา
+- ตอนถูกฝัง: ซ่อนปุ่ม "เล่นใหม่" / "รีเซ็ตทั้งหมด" และหลังส่งผลแล้วซ่อน "ลองใหม่เฉพาะข้อผิด" แสดงว่าจอจะไปสถานีถัดไป (ผ่าน) หรือโหลดเกมใหม่ (ไม่ผ่าน) ตามพฤติกรรมของ portal · เปิดเกมตรง ๆ ยังเหมือนเดิม
+- หน้าใส่รหัสผู้ดูแลและแถบสถานะการส่งผลเปลี่ยนเป็นธีมสว่างให้เข้ากับดีไซน์ NewDsign
 - รวม branch `NewDsign`: เปลี่ยนเป็นธีมสว่าง (หน้าเกม, editor, header, confetti, `f1.css` เพิ่ม variant `fit` สำหรับจอใหญ่) · ปุ่ม "📁 เลือกรูปจากเครื่อง" ใน editor · รูปตัวอย่าง F1 ชุดใหม่ · เพิ่ม `run-dev.bat` เปิด dev server — ไม่แตะ API และการส่งผลไป portal
 - ชุดคำถามย้ายจาก localStorage ไปเก็บที่ backend — เกมใน iframe ข้ามเว็บมองไม่เห็น localStorage ของหน้า editor · ถ้าโหลดไม่ได้หรือยังไม่มีชุดคำถาม หน้าเกมแสดงข้อความแทน (ไม่ใช้ข้อมูลตัวอย่างเงียบ ๆ)
 - รูปในชุดคำถามอัปโหลดขึ้น server (`/api/upload`) แล้วเก็บเป็น URL แทน base64 (ยังย่อเหลือกว้าง 900px ก่อนส่ง) รูป base64 เดิมยังใช้ได้
@@ -20,12 +25,18 @@
 - ย้ายการเสิร์ฟไฟล์อัปโหลดจาก `/uploads` และ `/I-DOJO/uploads` ไปที่ `/api/uploads` ให้ Apache บน Pi proxy ถึง และลบ proxy `/I-DOJO/uploads` ใน `vite.config.ts`
 
 ### Fixed
+- ack จากจอที่มาช้ากว่า 10 วิ ตอนนี้ยังนับเป็น "ส่งผลแล้ว" ไม่ค้างที่ "ส่งไม่สำเร็จ"
+- อัปโหลดไฟล์ผิดชนิดหรือใหญ่เกินได้ข้อความภาษาไทยแทน "(500)" (multer error ตอบเป็น JSON 400)
+- โฟลเดอร์ `uploads` อ้างจากที่อยู่ของ `index.js` ไม่ขึ้นกับว่า PM2 start จากโฟลเดอร์ไหน
+- ป้ายข้างปุ่มเลือกรูปใน editor ขึ้น "มีรูปอยู่แล้ว" เมื่อรูปเป็น URL บน server (เดิมขึ้น "ยังไม่ได้เลือกไฟล์")
 - สร้าง id คู่คำถามใหม่ไม่พังเมื่อเปิดผ่าน `http://<IP ของ Pi>` (`crypto.randomUUID` ใช้ไม่ได้นอก secure context)
 - แก้ชื่อ env ใน `DEPLOYMENT.md` ให้ตรงกับโค้ด: `DB_PASSWORD` → `DB_PASS`, ตัด `DB_PORT` ที่โค้ดไม่ได้อ่าน, เพิ่ม `ADMIN_SECRET`
 
 ### Security
+- `POST /api/records` และ `POST /api/app-config` (โค้ดตัวอย่าง) ต้องใช้ `x-admin-secret` แล้ว — เดิมใครใน LAN ก็เขียน DB ได้
 - การบันทึกชุดคำถามและอัปโหลดรูปต้องใช้ `x-admin-secret` (= `ADMIN_SECRET`) ที่ผู้ดูแลกรอกเอง ไม่ฝังใน bundle · `DELETE /api/records` ใช้ตัวตรวจเดียวกัน
 
 ### Removed
+- เลิกรองรับวิดีโอ YouTube (Pi/จอ Station ไม่มีเน็ต): ลบ iframe/`toEmbedUrl` ใน `VideoPlayer` และลิงก์ YouTube ในชุดตัวอย่าง F1 · ข้อมูลเก่าที่เป็นลิงก์ YouTube ไม่แสดงปุ่มดูวิดีโอ และ editor ขึ้นเตือนให้อัปโหลด .mp4
 - เลิกรองรับ Netlify: ลบ `netlify.toml`, script `build:hosted`, โหมด `hosted` ใน `vite.config.ts` และ `utils/mode.ts` (`IS_HOSTED`) — basename `/I-DOJO` ตายตัว
 - ลบ `VITE_ADMIN_SECRET` / `VITE_DEMO_MODE` ออกจาก `frontend/.env.example` (frontend ไม่ได้อ่านแล้ว)

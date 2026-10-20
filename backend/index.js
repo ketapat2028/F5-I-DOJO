@@ -23,7 +23,9 @@ app.use(cors());
 // ชุดคำถามเก่า/ที่ import มาอาจยังมีรูปเป็น base64 ฝังอยู่ จึงเผื่อขนาดไว้
 app.use(express.json({ limit: '10mb' }));
 // อยู่ใต้ /api/ เพื่อให้ Apache บน Pi proxy มาถึง (/I-DOJO/api/uploads/<file>)
-app.use('/api/uploads', express.static('uploads'));
+// อ้างจากที่อยู่ของไฟล์นี้ ไม่ขึ้นกับว่า PM2 start จากโฟลเดอร์ไหน
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+app.use('/api/uploads', express.static(UPLOAD_DIR));
 
 // งานที่แก้ข้อมูล (บันทึกชุดคำถาม, อัปโหลดรูป, ลบ records) ต้องส่ง header x-admin-secret ตรงกับ ADMIN_SECRET
 function requireAdmin(req, res, next) {
@@ -35,25 +37,59 @@ function requireAdmin(req, res, next) {
 }
 
 // ========== Multer config ==========
-if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname).toLowerCase())
 });
 
-const upload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext)) {
-      cb(null, true);
-    } else {
-      cb(new Error('รองรับเฉพาะไฟล์รูปภาพ .jpg .jpeg .png .gif .webp เท่านั้น'));
+function makeUploader(exts, maxMb, kind) {
+  return multer({
+    storage,
+    limits: { fileSize: maxMb * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      if (exts.includes(ext)) {
+        cb(null, true);
+      } else {
+        cb(new Error(`รองรับเฉพาะไฟล์${kind} ${exts.join(' ')} เท่านั้น`));
+      }
+    }
+  });
+}
+
+const imageUpload = makeUploader(['.jpg', '.jpeg', '.png', '.gif', '.webp'], 10, 'รูปภาพ');
+// วิดีโอสอนเก็บบน Pi เอง (จอ Station ไม่มีเน็ตออก YouTube)
+const VIDEO_MAX_MB = 200;
+const videoUpload = makeUploader(['.mp4', '.webm'], VIDEO_MAX_MB, 'วิดีโอ');
+
+// error ของ multer (ไฟล์ผิดชนิด/ใหญ่เกิน) ตอบเป็น JSON 400 ให้หน้า editor แสดงข้อความได้
+function single(uploader, field) {
+  return (req, res, next) => {
+    uploader.single(field)(req, res, (err) => {
+      if (!err) return next();
+      const maxMb = uploader === videoUpload ? VIDEO_MAX_MB : 10;
+      const message = err.code === 'LIMIT_FILE_SIZE' ? `ไฟล์ใหญ่เกิน ${maxMb}MB` : err.message;
+      res.status(400).json({ error: message });
+    });
+  };
+}
+
+// ลบไฟล์ใน uploads ที่ชุดคำถามไม่ได้ใช้แล้ว — เว้นไฟล์ที่เพิ่งอัปโหลดไม่ถึง 1 ชม. (อาจยังแก้ค้างอยู่ใน editor อีก tab)
+const ORPHAN_GRACE_MS = 60 * 60 * 1000;
+async function removeOrphanUploads(savedJson) {
+  const names = await fs.promises.readdir(UPLOAD_DIR);
+  for (const name of names) {
+    if (name.startsWith('.') || savedJson.includes(`/uploads/${name}`)) continue;
+    const file = path.join(UPLOAD_DIR, name);
+    const stat = await fs.promises.stat(file);
+    if (stat.isFile() && Date.now() - stat.mtimeMs > ORPHAN_GRACE_MS) {
+      await fs.promises.unlink(file);
+      console.log('removed unused upload:', name);
     }
   }
-});
+}
 
 // ========== STATIC FILE SERVING + SPA FALLBACK ==========
 // ใช้ตอนรันโดยไม่มี Apache (เปิดตรง port 5000) — บน Pi ส่วนนี้ Apache เสิร์ฟจาก backend/build เอง
@@ -133,7 +169,7 @@ app.get('/api/records', async (req, res) => {
   }
 });
 
-app.post('/api/records', async (req, res) => {
+app.post('/api/records', requireAdmin, async (req, res) => {
   const { title, detail } = req.body;
   if (!title) {
     return res.status(400).json({ error: 'title is required' });
@@ -162,7 +198,12 @@ app.delete('/api/records', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/upload', requireAdmin, upload.single('image'), (req, res) => {
+app.post('/api/upload', requireAdmin, single(imageUpload, 'image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no file' });
+  res.json({ filename: req.file.filename });
+});
+
+app.post('/api/upload-video', requireAdmin, single(videoUpload, 'video'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no file' });
   res.json({ filename: req.file.filename });
 });
@@ -200,6 +241,7 @@ app.put('/api/game', requireAdmin, async (req, res) => {
       [json]
     );
     res.json({ ok: true });
+    removeOrphanUploads(json).catch((err) => console.error('removeOrphanUploads error:', err));
   } catch (err) {
     console.error('PUT /api/game error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -217,7 +259,7 @@ app.get('/api/app-config', async (req, res) => {
   }
 });
 
-app.post('/api/app-config', async (req, res) => {
+app.post('/api/app-config', requireAdmin, async (req, res) => {
   try {
     const json = JSON.stringify(req.body);
     await query(

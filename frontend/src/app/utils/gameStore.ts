@@ -77,24 +77,21 @@ const IMG_TROPHY = svg(
 );
 
 function seedPairs(): MatchPair[] {
-  type TextSeed = [string, string, string, string, string];
+  type TextSeed = [string, string];
   const textSeeds: TextSeed[] = [
-    ["DRS", "ระบบลดแรงต้านอากาศ", "8h5d1v9T0eY", "DRS คืออะไร? ทำไมถึงแซงได้ง่าย", "การทำงานของ Drag Reduction System วิธีเปิดใช้ และจุดตรวจจับบนแทร็ก"],
-    ["ERS", "ระบบคืนพลังงานไฟฟ้า", "0h0X8q1j3wQ", "ERS ระบบไฮบริดหัวใจของ F1", "เจาะลึก MGU-K และ MGU-H วิธีเก็บและปล่อยพลังงาน 160 แรงม้า"],
-    ["Undercut", "กลยุทธ์เข้าพิตก่อนเพื่อแซง", "dQw4w9WgXcQ", "Undercut vs Overcut วางแผนยังไงให้ชนะ", "กลยุทธ์พิตสต็อปที่ Ferrari และ Red Bull ใช้บ่อยที่สุด"],
-    ["Pole Position", "ออกตัวอันดับ 1 จากควอลิฟาย", "jNQXAC9IVRw", "ทำไม Pole ถึงสำคัญที่โมนาโก", "สถิติการชนะจากโพล และเทคนิคทำเวลาต่อรอบ"],
-    ["Safety Car", "รถนำขบวนช่วงอุบัติเหตุ", "9bZkp7q19f0", "Safety Car เปลี่ยนเกมการแข่งขันยังไง", "กฎ Safety Car และ Virtual Safety Car"],
-    ["DRS Zone", "โซนที่อนุญาตให้เปิด DRS", "3JZ_D3ELwOQ", "อ่าน DRS Detection Point ให้เป็น", "ดูกราฟิกบนจอให้รู้ว่ารถคันไหนเปิด DRS ได้"],
+    ["DRS", "ระบบลดแรงต้านอากาศ"],
+    ["ERS", "ระบบคืนพลังงานไฟฟ้า"],
+    ["Undercut", "กลยุทธ์เข้าพิตก่อนเพื่อแซง"],
+    ["Pole Position", "ออกตัวอันดับ 1 จากควอลิฟาย"],
+    ["Safety Car", "รถนำขบวนช่วงอุบัติเหตุ"],
+    ["DRS Zone", "โซนที่อนุญาตให้เปิด DRS"],
   ];
-  const pairs: MatchPair[] = textSeeds.map(([q, a, vid, title, desc], i) => ({
+  const pairs: MatchPair[] = textSeeds.map(([q, a], i) => ({
     id: `p${i + 1}`,
     promptType: "text",
     promptText: q,
     answerType: "text",
     answerText: a,
-    videoUrl: `https://www.youtube.com/embed/${vid}`,
-    videoTitle: title,
-    videoDesc: desc,
   }));
   pairs.push(
     {
@@ -105,9 +102,6 @@ function seedPairs(): MatchPair[] {
       answerType: "image",
       answerText: "Ferrari",
       answerImage: IMG_FERRARI_LOGO,
-      videoUrl: "https://www.youtube.com/embed/8h5d1v9T0eY",
-      videoTitle: "จับคู่ภาพ: รถแข่ง → ทีมผู้ผลิต",
-      videoDesc: "ตัวอย่างโหมดจับคู่ภาพ",
     },
     {
       id: "p8",
@@ -117,9 +111,6 @@ function seedPairs(): MatchPair[] {
       answerType: "image",
       answerText: "Red Bull Racing",
       answerImage: IMG_REDBULL,
-      videoUrl: "https://www.youtube.com/embed/0h0X8q1j3wQ",
-      videoTitle: "Mixed Mode: ภาพ + ข้อความ → ภาพ",
-      videoDesc: "โจทย์มีภาพและข้อความ คำตอบเป็นภาพ",
     },
   );
   return pairs;
@@ -252,19 +243,28 @@ export async function verifyAdmin(adminSecret: string): Promise<boolean> {
   return true;
 }
 
-// คืน URL ของรูปบน server (/I-DOJO/api/uploads/<file>) ไว้เก็บแทน base64
-export async function uploadImage(file: Blob, adminSecret: string): Promise<string> {
+// อัปโหลดไฟล์แล้วคืน URL บน server (/I-DOJO/api/uploads/<file>)
+async function uploadFile(endpoint: string, field: string, file: Blob, fallbackName: string, adminSecret: string, what: string) {
   const form = new FormData();
-  const name = file instanceof File ? file.name : "image.jpg";
-  form.append("image", file, name);
-  const res = await fetch(`${API}/upload`, {
+  form.append(field, file, file instanceof File ? file.name : fallbackName);
+  const res = await fetch(`${API}/${endpoint}`, {
     method: "POST",
     headers: { "x-admin-secret": adminSecret },
     body: form,
   });
-  if (!res.ok) throw await failure(res, "อัปโหลดรูป");
+  if (!res.ok) throw await failure(res, what);
   const { filename } = await res.json();
   return `${API}/uploads/${filename}`;
+}
+
+// รูปเก็บเป็น URL แทน base64
+export function uploadImage(file: Blob, adminSecret: string): Promise<string> {
+  return uploadFile("upload", "image", file, "image.jpg", adminSecret, "อัปโหลดรูป");
+}
+
+// วิดีโอสอน .mp4/.webm เก็บบน Pi (ไม่ใช้ YouTube เพราะจอ Station ไม่มีเน็ตออก)
+export function uploadVideo(file: File, adminSecret: string): Promise<string> {
+  return uploadFile("upload-video", "video", file, "video.mp4", adminSecret, "อัปโหลดวิดีโอ");
 }
 
 // ชุดตัวอย่าง F1 ให้ editor ใช้เป็นจุดเริ่มเมื่อ server ยังไม่มีข้อมูล
