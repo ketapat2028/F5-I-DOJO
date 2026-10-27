@@ -1,46 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { F1Header } from "../components/F1Header";
-import { VideoPlayer } from "../components/VideoPlayer";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import type { MatchPair, PromptType, Theme } from "../types/theme";
+import type { AnswerOption, MatchPair, PromptType, Theme } from "../types/theme";
 import { fileToUploadableImage } from "../utils/image";
 import {
   exportGameJson,
   getGame,
   isPairComplete,
   makeDemoGame,
+  makeEmptyAnswer,
   makeEmptyPair,
   NoGameError,
   parseImportedPairs,
   readLegacyLocalGame,
   saveGame,
-  UnauthorizedError,
   uploadImage,
-  verifyAdmin,
 } from "../utils/gameStore";
 
 const MIN_PAIRS = 2;
-// รหัสผู้ดูแลเก็บไว้แค่ใน tab นี้ ปิด tab แล้วต้องใส่ใหม่
-const SECRET_KEY = "idojo.adminSecret";
-
-function readSecret(): string {
-  try {
-    return sessionStorage.getItem(SECRET_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function writeSecret(value: string) {
-  try {
-    if (value) sessionStorage.setItem(SECRET_KEY, value);
-    else sessionStorage.removeItem(SECRET_KEY);
-  } catch {
-    // ไม่มี sessionStorage ก็ใช้แค่ใน state
-  }
-}
+const MIN_ANSWERS = 1;
 
 function errorText(e: unknown, fallback: string): string {
   return e instanceof Error ? e.message : fallback;
@@ -153,9 +133,6 @@ function SideFields({ title, type, text, image, onType, onText, onImage, onUploa
 
 export function EditPage() {
   const navigate = useNavigate();
-  const [secret, setSecret] = useState<string>(readSecret);
-  const [secretInput, setSecretInput] = useState("");
-  const [checkingSecret, setCheckingSecret] = useState(false);
   const [game, setGame] = useState<Theme | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -164,7 +141,7 @@ export function EditPage() {
   const importFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!secret || game) return;
+    if (game) return;
     getGame()
       .then(setGame)
       .catch((e) => {
@@ -181,7 +158,7 @@ export function EditPage() {
           setNotice("server ยังไม่มีชุดคำถาม — เริ่มจากชุดตัวอย่าง F1 แก้แล้วกดบันทึก");
         }
       });
-  }, [secret, game]);
+  }, [game]);
 
   useEffect(() => {
     if (!status) return;
@@ -189,83 +166,13 @@ export function EditPage() {
     return () => clearTimeout(t);
   }, [status]);
 
-  function forgetSecret(message: string) {
-    writeSecret("");
-    setSecret("");
-    setStatus(null);
-    setLoadError(message);
-  }
-
-  async function handleSubmitSecret() {
-    const value = secretInput.trim();
-    if (!value) return;
-    setCheckingSecret(true);
-    try {
-      if (await verifyAdmin(value)) {
-        writeSecret(value);
-        setSecret(value);
-        setSecretInput("");
-        setLoadError(null);
-      } else {
-        setLoadError("รหัสผู้ดูแลไม่ถูกต้อง");
-      }
-    } catch (e) {
-      setLoadError(errorText(e, "ตรวจรหัสไม่สำเร็จ"));
-    } finally {
-      setCheckingSecret(false);
-    }
-  }
-
   async function handleUploadImage(file: File): Promise<string | undefined> {
     try {
-      return await uploadImage(await fileToUploadableImage(file), secret);
+      return await uploadImage(await fileToUploadableImage(file));
     } catch (e) {
-      if (e instanceof UnauthorizedError) forgetSecret("รหัสผู้ดูแลหมดอายุหรือไม่ถูกต้อง ใส่ใหม่อีกครั้ง");
-      else setStatus(errorText(e, "อัปโหลดรูปไม่สำเร็จ"));
+      setStatus(errorText(e, "อัปโหลดรูปไม่สำเร็จ"));
       return undefined;
     }
-  }
-
-  if (!secret) {
-    return (
-      <div className="f1-carbon-bg min-h-screen">
-        <F1Header />
-        <main className="mx-auto max-w-md space-y-3 p-6">
-          <h1 className="f1-font-display text-2xl font-bold text-white">🔒 EDIT MODE</h1>
-          <form
-            className="space-y-3 rounded-sm border-2 border-[#333] bg-black/70 p-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSubmitSecret();
-            }}
-          >
-            <label className="block space-y-1 text-sm text-[#FFD60A]">
-              <span>รหัสผู้ดูแล</span>
-              <Input
-                type="password"
-                autoFocus
-                value={secretInput}
-                onChange={(e) => setSecretInput(e.target.value)}
-                className="bg-[#161616] text-white"
-              />
-            </label>
-            {loadError && <p className="text-sm text-red-300">{loadError}</p>}
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" className="border-[#333] text-white" onClick={() => navigate("/")}>
-                กลับไปเล่น
-              </Button>
-              <Button
-                type="submit"
-                disabled={checkingSecret || !secretInput.trim()}
-                className="f1-font-display bg-[#DC0000] text-white hover:bg-[#b00000]"
-              >
-                {checkingSecret ? "กำลังตรวจ..." : "เข้าสู่ EDIT MODE"}
-              </Button>
-            </div>
-          </form>
-        </main>
-      </div>
-    );
   }
 
   if (!game) {
@@ -297,6 +204,49 @@ export function EditPage() {
     );
   }
 
+  function updateAnswer(pairId: string, answerId: string, patch: Partial<AnswerOption>) {
+    setGame((prev) =>
+      prev
+        ? {
+            ...prev,
+            pairs: prev.pairs.map((p) =>
+              p.id === pairId
+                ? { ...p, answers: p.answers.map((a) => (a.id === answerId ? { ...a, ...patch } : a)) }
+                : p,
+            ),
+          }
+        : prev,
+    );
+  }
+
+  function addAnswer(pairId: string) {
+    setGame((prev) =>
+      prev
+        ? {
+            ...prev,
+            pairs: prev.pairs.map((p) =>
+              p.id === pairId ? { ...p, answers: [...p.answers, makeEmptyAnswer()] } : p,
+            ),
+          }
+        : prev,
+    );
+  }
+
+  function removeAnswer(pairId: string, answerId: string) {
+    setGame((prev) =>
+      prev
+        ? {
+            ...prev,
+            pairs: prev.pairs.map((p) =>
+              p.id === pairId && p.answers.length > MIN_ANSWERS
+                ? { ...p, answers: p.answers.filter((a) => a.id !== answerId) }
+                : p,
+            ),
+          }
+        : prev,
+    );
+  }
+
   async function handleSave() {
     if (!game) return;
     const badIndex = game.pairs.findIndex((p) => !isPairComplete(p));
@@ -308,11 +258,10 @@ export function EditPage() {
     }
     setSaving(true);
     try {
-      await saveGame(game, secret);
+      await saveGame(game);
       navigate("/");
     } catch (e) {
-      if (e instanceof UnauthorizedError) forgetSecret("รหัสผู้ดูแลหมดอายุหรือไม่ถูกต้อง ใส่ใหม่แล้วกดบันทึกอีกครั้ง");
-      else setStatus(errorText(e, "บันทึกไม่สำเร็จ"));
+      setStatus(errorText(e, "บันทึกไม่สำเร็จ"));
     } finally {
       setSaving(false);
     }
@@ -406,51 +355,43 @@ export function EditPage() {
                 onImage={(v) => updatePair(pair.id, { promptImage: v })}
                 onUpload={handleUploadImage}
               />
-              <SideFields
-                title="✅ คำตอบ (ขวา)"
-                type={pair.answerType}
-                text={pair.answerText}
-                image={pair.answerImage}
-                onType={(t) => updatePair(pair.id, { answerType: t })}
-                onText={(v) => updatePair(pair.id, { answerText: v })}
-                onImage={(v) => updatePair(pair.id, { answerImage: v })}
-                onUpload={handleUploadImage}
-              />
-            </div>
-
-            <div className="space-y-2 border-t border-f1-line pt-3 text-sm text-zinc-700">
-              <span className="f1-font-display">▶️ วิดีโอสอน (แสดงเมื่อตอบข้อนี้ผิด)</span>
-              <label className="block space-y-1">
-                <span>Video URL (ลิงก์ YouTube ทั้งแบบ watch และ embed หรือไฟล์ .mp4)</span>
-                <Input
-                  value={pair.videoUrl ?? ""}
-                  onChange={(e) => updatePair(pair.id, { videoUrl: e.target.value })}
-                  placeholder="https://www.youtube.com/watch?v=รหัสวิดีโอ หรือ https://.../video.mp4"
-                  className="border-[#8B8B95] bg-white text-f1-ink"
-                />
-              </label>
-              <label className="block space-y-1">
-                <span>ชื่อวิดีโอ</span>
-                <Input
-                  value={pair.videoTitle ?? ""}
-                  onChange={(e) => updatePair(pair.id, { videoTitle: e.target.value })}
-                  className="border-[#8B8B95] bg-white text-f1-ink"
-                />
-              </label>
-              <label className="block space-y-1">
-                <span>คำอธิบายวิดีโอ</span>
-                <textarea
-                  value={pair.videoDesc ?? ""}
-                  onChange={(e) => updatePair(pair.id, { videoDesc: e.target.value })}
-                  rows={2}
-                  className="w-full rounded-md border border-[#8B8B95] bg-white px-3 py-2 text-sm text-f1-ink outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                />
-              </label>
-              {pair.videoUrl && (
-                <div className="w-64">
-                  <VideoPlayer url={pair.videoUrl} />
-                </div>
-              )}
+              <div className="space-y-2">
+                {pair.answers.map((answer, aIdx) => (
+                  <div key={answer.id} className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="f1-font-mono text-xs text-f1-mute">คำตอบที่ {aIdx + 1}</span>
+                      {pair.answers.length > MIN_ANSWERS && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs text-[#DC0000] hover:bg-[#DC0000]/10 hover:text-[#B00000]"
+                          onClick={() => removeAnswer(pair.id, answer.id)}
+                        >
+                          ลบคำตอบนี้
+                        </Button>
+                      )}
+                    </div>
+                    <SideFields
+                      title={aIdx === 0 ? "✅ คำตอบ (ขวา)" : `✅ คำตอบ (ขวา) #${aIdx + 1}`}
+                      type={answer.type}
+                      text={answer.text}
+                      image={answer.image}
+                      onType={(t) => updateAnswer(pair.id, answer.id, { type: t })}
+                      onText={(v) => updateAnswer(pair.id, answer.id, { text: v })}
+                      onImage={(v) => updateAnswer(pair.id, answer.id, { image: v })}
+                      onUpload={handleUploadImage}
+                    />
+                  </div>
+                ))}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
+                  onClick={() => addAnswer(pair.id)}
+                >
+                  + เพิ่มคำตอบ
+                </Button>
+              </div>
             </div>
           </div>
         ))}

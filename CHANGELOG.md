@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+- เอาฟีเจอร์วิดีโอสอนออกทั้งหมด: ลบช่องกรอก Video URL/ชื่อ/คำอธิบายในหน้า editor, ปุ่ม "ดูวิดีโอสอน" + modal เล่นวิดีโอตอนตอบผิดในหน้าเกม, ลบคอมโพเนนต์ `VideoPlayer.tsx`, ลบ `videoUrl`/`videoTitle`/`videoDesc` ออกจาก `MatchPair`/`SpecRecord` และชุดตัวอย่าง F1
+- ตัดระบบรหัสผู้ดูแล (`ADMIN_SECRET`) ทั้งหมดตามคำขอ (ใช้งานในวง LAN ปิดที่ไว้ใจได้) — `/I-DOJO/editor` ไม่ถาม/ตรวจรหัสอีกต่อไป, ลบ `requireAdmin` + route `GET /api/admin/check` ออกจาก backend, `PUT /api/game` / `POST /api/upload` / `DELETE /api/records` ไม่ต้องส่ง header `x-admin-secret` อีกต่อไป, ลบ `ADMIN_SECRET` ออกจาก `.env.example` และ `DEPLOYMENT.md`
+
 ### Added
 - เชื่อมเกมกับจอ Station ของ I-Dojo LPB portal ตาม `PORTAL_INTEGRATION.md`: `utils/portalBridge.ts` ส่งผล `pass` เมื่อถูกครบ / `fail` เมื่อหมดเวลา (ผิดแต่เวลาเหลือไม่ส่ง) กันส่งซ้ำระหว่างรอ ack (10 วิ) แสดงสถานะ "กำลังส่งผล / ส่งผลแล้ว / ส่งไม่สำเร็จ [ส่งใหม่]" ใน modal ผล และส่งต่อปุ่ม Enter/Space ของวิทยากร — ทำงานเฉพาะตอนถูกฝังใน iframe
 - route `GET/PUT /api/game` + ตาราง `game` เก็บชุดคำถามที่ backend และ `GET /api/admin/check` ให้ editor ตรวจรหัส

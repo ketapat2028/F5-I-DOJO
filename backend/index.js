@@ -25,15 +25,6 @@ app.use(express.json({ limit: '10mb' }));
 // อยู่ใต้ /api/ เพื่อให้ Apache บน Pi proxy มาถึง (/I-DOJO/api/uploads/<file>)
 app.use('/api/uploads', express.static('uploads'));
 
-// งานที่แก้ข้อมูล (บันทึกชุดคำถาม, อัปโหลดรูป, ลบ records) ต้องส่ง header x-admin-secret ตรงกับ ADMIN_SECRET
-function requireAdmin(req, res, next) {
-  const secret = req.headers['x-admin-secret'];
-  if (!process.env.ADMIN_SECRET || !secret || secret !== process.env.ADMIN_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  next();
-}
-
 // ========== Multer config ==========
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
 
@@ -152,7 +143,7 @@ app.post('/api/records', async (req, res) => {
   }
 });
 
-app.delete('/api/records', requireAdmin, async (req, res) => {
+app.delete('/api/records', async (req, res) => {
   try {
     await query('DELETE FROM records');
     res.json({ ok: true });
@@ -162,14 +153,9 @@ app.delete('/api/records', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/upload', requireAdmin, upload.single('image'), (req, res) => {
+app.post('/api/upload', upload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no file' });
   res.json({ filename: req.file.filename });
-});
-
-// ให้หน้า editor ตรวจรหัสผู้ดูแลก่อนเริ่มแก้
-app.get('/api/admin/check', requireAdmin, (req, res) => {
-  res.json({ ok: true });
 });
 
 app.get('/api/game', async (req, res) => {
@@ -183,7 +169,7 @@ app.get('/api/game', async (req, res) => {
   }
 });
 
-app.put('/api/game', requireAdmin, async (req, res) => {
+app.put('/api/game', async (req, res) => {
   const { name, timeLimitSeconds, pairs } = req.body || {};
   if (!Array.isArray(pairs) || pairs.length < 2) {
     return res.status(400).json({ error: 'ต้องมีอย่างน้อย 2 คู่' });

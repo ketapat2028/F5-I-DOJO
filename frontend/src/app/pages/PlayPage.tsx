@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Confetti } from "../components/Confetti";
 import { F1Header } from "../components/F1Header";
-import { VideoPlayer } from "../components/VideoPlayer";
 import { Button } from "../components/ui/button";
 import { cn } from "../components/ui/utils";
 import type { MatchPair, PromptType, Theme } from "../types/theme";
@@ -9,24 +8,14 @@ import { getGame, NoGameError } from "../utils/gameStore";
 import { forwardKeys, isEmbedded, listenPortal, sendResult, type PortalAck, type PortalResult } from "../utils/portalBridge";
 
 type Phase = "idle" | "running" | "finished" | "timeout";
-type Chip = { id: string; text: string; letter: string; type: PromptType; image?: string };
-type DragInfo = {
-  chipId: string;
-  fromBoxId: string | null;
-  startX: number;
-  startY: number;
-  width: number;
-  height: number;
-  dx: number;
-  dy: number;
-  active: boolean;
-};
+type Chip = { id: string; pairId: string; text: string; letter: string; type: PromptType; image?: string };
+type PlacedCard = { label: string; correct: boolean };
 type WrongItem = {
   pairId: string;
   topic: string;
-  yourAnswer: string | null;
-  correctAnswer: string;
-  hasVideo: boolean;
+  placedCards: PlacedCard[]; // การ์ดที่วางไว้ แต่ละใบบอกเองว่าถูกหรือผิด
+  correctCards: string[]; // คำตอบที่ถูกจริงทั้งหมด (โชว์ตอนกด เฉลย)
+  missingCount: number; // ใส่ถูกครบทุกใบที่วาง แต่ยังขาดอีกกี่ใบ
 };
 type ModalData = {
   allCorrect: boolean;
@@ -36,14 +25,12 @@ type ModalData = {
   timeUsedSeconds: number;
   wrong: WrongItem[];
 };
-type VideoView = { pairIds: string[]; index: number };
 type PortalStatus = "idle" | "sending" | "sent" | "error";
 type PortalReport = { result: PortalResult; score: number };
 
 // portal ไม่ตอบ ack ภายในเวลานี้ = ถือว่ายังไม่ได้บันทึก (PORTAL_INTEGRATION.md ข้อ 2)
 const ACK_TIMEOUT_MS = 10_000;
 
-const DRAG_THRESHOLD = 6;
 const TYPE_BADGE: Record<PromptType, string> = { text: "TEXT", image: "IMAGE", mixed: "MIXED" };
 
 function shuffle<T>(arr: T[]): T[] {
@@ -56,10 +43,12 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 // ตัวอักษร A, B, C... ติดตามตำแหน่งหลังสลับ เพื่อไม่ให้ลำดับตัวอักษรเฉลยคำตอบ
+// 1 คำถามมีได้หลายคำตอบ — แต่ละคำตอบกลายเป็นการ์ดของตัวเอง ผูกกลับไปที่คำถามด้วย pairId
 function makeChips(pairs: MatchPair[]): Chip[] {
-  return shuffle(
-    pairs.map((p) => ({ id: p.id, text: p.answerText, type: p.answerType, image: p.answerImage })),
-  ).map((c, i) => ({ ...c, letter: String.fromCharCode(65 + i) }));
+  const flat = pairs.flatMap((p) =>
+    p.answers.map((a) => ({ id: a.id, pairId: p.id, text: a.text, type: a.type, image: a.image })),
+  );
+  return shuffle(flat).map((c, i) => ({ ...c, letter: String.fromCharCode(65 + i) }));
 }
 
 function chipLabel(chip: Chip | undefined): string | null {
@@ -92,23 +81,26 @@ export function PlayPage() {
   const [game, setGame] = useState<Theme | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [chips, setChips] = useState<Chip[]>([]);
-  const [slots, setSlots] = useState<Record<string, string | null>>({});
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // box id = pair.id เสมอ · value = รายการ chip id ที่วางอยู่ในช่องนี้ (ความจุ = pair.answers.length)
+  const [slots, setSlots] = useState<Record<string, string[]>>({});
   const [lockedCorrect, setLockedCorrect] = useState<Set<string>>(new Set());
+  // ช่องที่มีการ์ดผิดจริงๆ ปนอยู่ (ไม่ใช่แค่ใส่ยังไม่ครบ) — ใช้ไฮไลต์แดง/เขย่าที่ตัวช่อง
   const [wrongBoxIds, setWrongBoxIds] = useState<Set<string>>(new Set());
+  // การ์ดใบไหนบ้างที่ไม่ใช่คำตอบของข้อนั้น — ใช้ขึ้นกากบาทแดงเฉพาะใบที่ผิดจริง
+  const [wrongChipIds, setWrongChipIds] = useState<Set<string>>(new Set());
   const [elapsed, setElapsed] = useState(0);
-  const [hoverBoxId, setHoverBoxId] = useState<string | null>(null);
   const [modalData, setModalData] = useState<ModalData | null>(null);
-  const [videoView, setVideoView] = useState<VideoView | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  // กดช่องว่างที่ยังไม่ได้เลือกการ์ดไว้ล่วงหน้า → เปิด popup นี้ให้เลือกคำตอบจากคลังแล้ววางทันที
+  const [pickerBoxId, setPickerBoxId] = useState<string | null>(null);
+  // ตรวจคำตอบ = บอกแค่ถูก/ผิด · ต้องกดปุ่มเฉลยแยกต่างหากถึงจะเห็นคำตอบที่ถูกจริง
+  const [showAnswerKey, setShowAnswerKey] = useState(false);
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [portalStatus, setPortalStatus] = useState<PortalStatus>("idle");
   const [portalMsg, setPortalMsg] = useState<string | null>(null);
 
-  const dragRef = useRef<DragInfo | null>(null);
-  const justDraggedRef = useRef(false);
   const embedded = isEmbedded();
   // ผลที่ส่งแล้วกำลังรอ ack (กันส่งซ้ำ) และผลล่าสุดไว้กด "ส่งใหม่"
   const pendingRef = useRef<PortalReport | null>(null);
@@ -179,9 +171,13 @@ export function PlayPage() {
   }
 
   const total = game.pairs.length;
-  const filledCount = game.pairs.filter((p) => slots[p.id]).length;
+  const filledCount = game.pairs.filter((p) => (slots[p.id]?.length ?? 0) === p.answers.length).length;
   const isAllFilled = filledCount === total;
-  const pool = chips.filter((c) => !Object.values(slots).some((v) => v === c.id));
+  // ใส่คำตอบไปแล้วอย่างน้อย 1 ใบ ก็กดตรวจได้ทันที ไม่ต้องรอครบทุกช่อง
+  const totalSlots = game.pairs.reduce((sum, p) => sum + p.answers.length, 0);
+  const totalPlaced = Object.values(slots).reduce((sum, arr) => sum + arr.length, 0);
+  const hasAnyPlaced = totalPlaced > 0;
+  const pool = chips.filter((c) => !Object.values(slots).some((arr) => arr.includes(c.id)));
   const hasLimit = game.timeLimitSeconds > 0;
   const remaining = hasLimit ? Math.max(0, game.timeLimitSeconds - elapsed) : null;
   const lowTime = remaining !== null && remaining <= 60;
@@ -219,32 +215,32 @@ export function PlayPage() {
     }
     setChips(makeChips(game.pairs));
     setSlots({});
-    setSelectedId(null);
+    setPickerBoxId(null);
     setLockedCorrect(new Set());
     setWrongBoxIds(new Set());
+    setWrongChipIds(new Set());
     setElapsed(0);
     setModalData(null);
-    setVideoView(null);
+    setShowAnswerKey(false);
     setPhase("idle");
   }
 
   function clearAnswers() {
     setSlots({});
-    setSelectedId(null);
     setLockedCorrect(new Set());
     setWrongBoxIds(new Set());
+    setWrongChipIds(new Set());
   }
 
+  // fromBoxId = ลบการ์ดออกจากช่อง (removeChipFromSlot) · targetBoxId = วางการ์ดลงช่อง (pickForBox) — ไม่เกิดพร้อมกัน
   function placeChip(chipId: string, fromBoxId: string | null, targetBoxId: string | null) {
     setSlots((prev) => {
-      const next = { ...prev };
-      if (fromBoxId) next[fromBoxId] = null;
+      const next: Record<string, string[]> = {};
+      for (const [k, v] of Object.entries(prev)) next[k] = v.filter((id) => id !== chipId);
       if (targetBoxId) {
-        const occupant = next[targetBoxId];
-        if (occupant && occupant !== chipId && fromBoxId) {
-          next[fromBoxId] = occupant;
-        }
-        next[targetBoxId] = chipId;
+        const capacity = game?.pairs.find((p) => p.id === targetBoxId)?.answers.length ?? 1;
+        const occupants = next[targetBoxId] ?? [];
+        if (occupants.length < capacity) next[targetBoxId] = [...occupants, chipId];
       }
       return next;
     });
@@ -254,32 +250,51 @@ export function PlayPage() {
       if (targetBoxId) next.delete(targetBoxId);
       return next;
     });
+    setWrongChipIds((prev) => {
+      if (!prev.has(chipId)) return prev;
+      const next = new Set(prev);
+      next.delete(chipId);
+      return next;
+    });
   }
 
   function handleCheck(isAuto: boolean) {
     if (!game) return;
-    if (!isAuto && !isAllFilled) return;
+    if (!isAuto && !hasAnyPlaced) return;
     const newLocked = new Set(lockedCorrect);
     const newWrongIds = new Set<string>();
+    const newWrongChipIds = new Set<string>();
     const wrong: WrongItem[] = [];
     for (const pair of game.pairs) {
-      const chipId = slots[pair.id];
-      if (chipId === pair.id) {
+      const placed = slots[pair.id] ?? [];
+      const correctIds = new Set(pair.answers.map((a) => a.id));
+      const isCorrect = placed.length === pair.answers.length && placed.every((id) => correctIds.has(id));
+      if (isCorrect) {
         newLocked.add(pair.id);
         continue;
       }
-      if (chipId) newWrongIds.add(pair.id);
+      // แยกการ์ดที่ผิดจริง (ไม่ใช่คำตอบของข้อนี้) ออกจากการ์ดที่ถูกแต่ใส่ยังไม่ครบ — ยังไม่ครบไม่เขย่า/ไม่ขึ้นกากบาท ถ้าทุกใบที่ใส่ยังถูกอยู่
+      const wrongCardIds = placed.filter((id) => !correctIds.has(id));
+      const hasWrongCard = wrongCardIds.length > 0;
+      if (hasWrongCard) newWrongIds.add(pair.id);
+      wrongCardIds.forEach((id) => newWrongChipIds.add(id));
       wrong.push({
         pairId: pair.id,
         topic: pair.promptText || "(ภาพ)",
-        yourAnswer: chipId ? chipLabel(chips.find((c) => c.id === chipId)) : null,
-        correctAnswer: chipLabel(chips.find((c) => c.id === pair.id)) ?? (pair.answerText || "(ภาพ)"),
-        hasVideo: Boolean(pair.videoUrl),
+        placedCards: placed.map((id) => ({
+          label: chipLabel(chips.find((c) => c.id === id)) ?? "?",
+          correct: correctIds.has(id),
+        })),
+        correctCards: pair.answers.map(
+          (a) => chipLabel(chips.find((c) => c.id === a.id)) ?? (a.text || "(ภาพ)"),
+        ),
+        missingCount: pair.answers.length - placed.length,
       });
     }
     setLockedCorrect(newLocked);
     setWrongBoxIds(newWrongIds);
-    setSelectedId(null);
+    setWrongChipIds(newWrongChipIds);
+    setShowAnswerKey(false);
     const allCorrect = wrong.length === 0;
     setModalData({
       allCorrect,
@@ -304,169 +319,41 @@ export function PlayPage() {
     setSlots((prev) => {
       const next = { ...prev };
       wrongBoxIds.forEach((boxId) => {
-        next[boxId] = null;
+        next[boxId] = [];
       });
       return next;
     });
     setWrongBoxIds(new Set());
     setModalData(null);
-    setVideoView(null);
+    setShowAnswerKey(false);
   }
 
-  function openVideo(pairId: string) {
-    if (!modalData) return;
-    const pairIds = modalData.wrong.filter((w) => w.hasVideo).map((w) => w.pairId);
-    setVideoView({ pairIds, index: Math.max(0, pairIds.indexOf(pairId)) });
-  }
-
-  // ===== โหมดคลิก =====
-  function handleBankChipClick(chip: Chip) {
-    if (locked || justDraggedRef.current) return;
-    startIfIdle();
-    setSelectedId((prev) => (prev === chip.id ? null : chip.id));
-  }
-
+  // กดช่องว่าง → เปิด popup ให้เลือกคำตอบจากคลังแล้ววางลงช่องนี้ทันที
   function handleSlotClick(boxId: string) {
-    if (locked || justDraggedRef.current || lockedCorrect.has(boxId) || !selectedId) return;
-    placeChip(selectedId, null, boxId);
-    setSelectedId(null);
-  }
-
-  function removeFromSlot(boxId: string) {
     if (locked || lockedCorrect.has(boxId)) return;
-    placeChip(slots[boxId] as string, boxId, null);
+    startIfIdle();
+    setPickerBoxId(boxId);
   }
 
-  // ===== โหมดลากวาง (เริ่มลากเมื่อขยับเกินระยะที่กำหนด ไม่งั้นนับเป็นการคลิก) =====
-  function findBoxOf(chipId: string): string | null {
-    for (const [boxId, occupantId] of Object.entries(slots)) {
-      if (occupantId === chipId) return boxId;
-    }
-    return null;
+  function pickForBox(chipId: string) {
+    if (!pickerBoxId) return;
+    placeChip(chipId, null, pickerBoxId);
+    setPickerBoxId(null);
   }
 
-  function handleChipPointerDown(e: React.PointerEvent<HTMLDivElement>, chip: Chip) {
-    if (locked) return;
-    const fromBoxId = findBoxOf(chip.id);
-    if (fromBoxId && lockedCorrect.has(fromBoxId)) return;
-    // ล็อกเมาส์/นิ้วไว้กับการ์ดตั้งแต่ตอนกด ไม่งั้นลากเร็วๆ แล้วเหตุการณ์ขยับจะไม่ถึงการ์ด
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const rect = e.currentTarget.getBoundingClientRect();
-    dragRef.current = {
-      chipId: chip.id,
-      fromBoxId,
-      startX: e.clientX,
-      startY: e.clientY,
-      width: rect.width,
-      height: rect.height,
-      dx: e.clientX - rect.left,
-      dy: e.clientY - rect.top,
-      active: false,
-    };
+  function removeChipFromSlot(boxId: string, chipId: string) {
+    if (locked || lockedCorrect.has(boxId)) return;
+    placeChip(chipId, boxId, null);
   }
 
-  function handleChipPointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    const d = dragRef.current;
-    if (!d) return;
-    const el = e.currentTarget;
-    if (!d.active) {
-      if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < DRAG_THRESHOLD) return;
-      d.active = true;
-      startIfIdle();
-      el.style.position = "fixed";
-      el.style.width = `${d.width}px`;
-      el.style.height = `${d.height}px`;
-      el.style.zIndex = "50";
-      el.style.pointerEvents = "none";
-      el.classList.add("f1-dragging");
-    }
-    el.style.left = `${e.clientX - d.dx}px`;
-    el.style.top = `${e.clientY - d.dy}px`;
-    const target = document
-      .elementFromPoint(e.clientX, e.clientY)
-      ?.closest<HTMLElement>("[data-dropbox-id]");
-    const boxId = target?.dataset.dropboxId ?? null;
-    setHoverBoxId(boxId && lockedCorrect.has(boxId) ? null : boxId);
-  }
-
-  function resetChipStyle(el: HTMLDivElement) {
-    el.style.position = "";
-    el.style.left = "";
-    el.style.top = "";
-    el.style.width = "";
-    el.style.height = "";
-    el.style.zIndex = "";
-    el.style.pointerEvents = "";
-    el.classList.remove("f1-dragging");
-  }
-
-  function finishDrag() {
-    justDraggedRef.current = true;
-    setTimeout(() => {
-      justDraggedRef.current = false;
-    }, 0);
-  }
-
-  function handleChipPointerUp(e: React.PointerEvent<HTMLDivElement>) {
-    const el = e.currentTarget;
-    const drag = dragRef.current;
-    dragRef.current = null;
-    if (!drag || !drag.active) return;
-    el.releasePointerCapture(e.pointerId);
-    resetChipStyle(el);
-    setHoverBoxId(null);
-    finishDrag();
-    const target = document
-      .elementFromPoint(e.clientX, e.clientY)
-      ?.closest<HTMLElement>("[data-dropbox-id]");
-    const rawTarget = target?.dataset.dropboxId ?? null;
-    const targetBoxId = rawTarget && !lockedCorrect.has(rawTarget) ? rawTarget : null;
-    placeChip(drag.chipId, drag.fromBoxId, targetBoxId);
-    setSelectedId(null);
-  }
-
-  function handleChipPointerCancel(e: React.PointerEvent<HTMLDivElement>) {
-    const drag = dragRef.current;
-    dragRef.current = null;
-    if (drag?.active) {
-      resetChipStyle(e.currentTarget);
-      finishDrag();
-    }
-    setHoverBoxId(null);
-  }
-
-  function renderChip(chip: Chip, inSlot = false) {
+  // แสดงการ์ดที่วางอยู่ในช่องคำตอบแล้ว (อ่านอย่างเดียว — เอาออกผ่านปุ่ม ✕ ของช่องเท่านั้น)
+  function renderChip(chip: Chip) {
     const hasImg = chip.type !== "text" && Boolean(chip.image);
     const captionClass = chip.type === "image" ? "text-xs xl:text-sm" : "";
-    const isSelected = !inSlot && selectedId === chip.id;
     return (
-      <div
-        key={chip.id}
-        data-chip-id={chip.id}
-        onPointerDown={(e) => handleChipPointerDown(e, chip)}
-        onPointerMove={handleChipPointerMove}
-        onPointerUp={handleChipPointerUp}
-        onPointerCancel={handleChipPointerCancel}
-        onClick={inSlot ? undefined : () => handleBankChipClick(chip)}
-        className={cn(
-          "f1-font-display touch-none select-none border-2 font-medium text-f1-ink",
-          inSlot
-            ? "border-transparent bg-transparent"
-            : isSelected
-              ? "border-f1-ink bg-f1-card shadow-[0_0_0_3px_rgba(220,0,0,0.55),0_0_16px_2px_rgba(220,0,0,0.35)]"
-              : "border-[#DC0000] bg-f1-card shadow-[0_0_0_1px_rgba(220,0,0,0.3)]",
-          inSlot
-            ? "flex h-full w-full min-h-0 cursor-grab flex-col items-center justify-center gap-1 rounded-md p-2 fit:p-1 text-center text-sm active:cursor-grabbing sm:text-base xl:text-xl fit:text-xs fit:xl:text-sm fit:2xl:text-lg"
-            : "flex cursor-pointer items-center gap-2 rounded-sm px-3 py-2 text-sm lg:px-5 lg:py-3 lg:text-lg fit:px-3 fit:py-1.5 fit:text-sm fit:2xl:text-base",
-        )}
-      >
+      <div className="f1-font-display flex h-full w-full min-h-0 flex-col items-center justify-center gap-1 rounded-md border-2 border-transparent bg-transparent p-2 fit:p-1 text-center text-sm font-medium text-f1-ink sm:text-base xl:text-xl fit:text-xs fit:xl:text-sm fit:2xl:text-lg">
         {hasImg && (
-          <img
-            src={chip.image}
-            alt=""
-            draggable={false}
-            className={inSlot ? "min-h-0 w-full flex-1 object-contain" : "h-12 w-16 object-contain lg:h-16 lg:w-24 fit:h-8 fit:w-12 fit:2xl:h-10 fit:2xl:w-16"}
-          />
+          <img src={chip.image} alt="" draggable={false} className="min-h-0 w-full flex-1 object-contain" />
         )}
         <span className={cn("leading-snug", captionClass)}>
           <span className="mr-1 text-f1-red">{chip.letter}.</span>
@@ -480,22 +367,22 @@ export function PlayPage() {
     const hasImg = pair.promptType !== "text" && Boolean(pair.promptImage);
     if (hasImg) {
       return (
-        <div className="relative flex min-w-0 aspect-[3/1] overflow-hidden rounded-sm border-2 border-f1-line border-l-[6px] border-l-[#DC0000] bg-zinc-200 shadow-sm fit:aspect-auto fit:h-full fit:min-h-0 fit:flex-1">
+        <div className="relative flex w-full min-w-0 items-center justify-center overflow-hidden rounded-sm border-2 border-f1-line border-l-[6px] border-l-[#DC0000] bg-zinc-200 shadow-sm">
           <img
             src={pair.promptImage}
             alt={pair.promptText}
             draggable={false}
-            className="absolute inset-0 h-full w-full object-cover"
+            className="h-auto w-full object-contain"
           />
-          <span className="f1-font-mono absolute left-2 top-2 rounded-sm bg-white/90 px-1.5 py-0.5 text-xs font-bold text-f1-red lg:text-sm">
+          <span className="f1-font-mono absolute left-2 top-1 rounded-sm bg-white/90 px-1.5 py-0.5 text-xs font-bold text-f1-red lg:text-sm">
             {idx + 1}
           </span>
-          <span className="f1-font-mono absolute right-2 top-2 rounded-sm border border-f1-line bg-white/90 px-1.5 py-0.5 text-[10px] text-f1-ink-2">
+          <span className="f1-font-mono absolute right-2 top-1 rounded-sm border border-f1-line bg-white/90 px-1.5 py-0.5 text-[10px] text-f1-ink-2">
             {TYPE_BADGE[pair.promptType]}
           </span>
           {pair.promptText && (
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 pb-2 pt-8 fit:pt-5">
-              <span className="f1-font-display break-words text-base font-bold leading-tight text-white lg:text-xl fit:text-sm fit:2xl:text-xl">
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 pb-1 pt-4">
+              <span className="f1-font-display break-words text-sm font-bold leading-tight text-white lg:text-base">
                 {pair.promptText}
               </span>
             </div>
@@ -504,7 +391,7 @@ export function PlayPage() {
       );
     }
     return (
-      <div className="relative flex min-w-0 items-center gap-3 rounded-sm border-2 border-f1-line border-l-[6px] border-l-[#DC0000] bg-white p-3 shadow-sm lg:gap-4 lg:p-5 fit:h-full fit:min-h-0 fit:flex-1 fit:overflow-hidden fit:p-2 fit:2xl:p-4">
+      <div className="relative flex min-w-0 items-center gap-3 rounded-sm border-2 border-f1-line border-l-[6px] border-l-[#DC0000] bg-white p-3 shadow-sm lg:gap-4 lg:p-5 fit:p-2 fit:2xl:p-4">
         <span className="f1-font-mono text-xs text-f1-red lg:text-base fit:shrink-0">{idx + 1}</span>
         <span className="f1-font-mono absolute right-2 top-2 rounded-sm border border-f1-line px-1.5 py-0.5 text-[10px] text-f1-red">
           {TYPE_BADGE[pair.promptType]}
@@ -516,11 +403,8 @@ export function PlayPage() {
     );
   }
 
-  const videoPair = videoView ? game.pairs.find((p) => p.id === videoView.pairIds[videoView.index]) : undefined;
-  const hasNextVideo = videoView ? videoView.index < videoView.pairIds.length - 1 : false;
   const sectionTitle = "f1-font-display text-lg font-bold tracking-wide text-f1-ink fit:text-sm";
-  const rowGrid =
-    "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-3 lg:gap-6 fit:flex fit:h-full fit:min-h-0 fit:gap-3";
+  const rowGrid = "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-3 lg:gap-6";
   const tier = modalData ? resultTier(modalData.score, modalData.total) : null;
   const howToList = (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
@@ -528,10 +412,10 @@ export function PlayPage() {
         [
           ["L", "ซ้าย = คำถาม (คงที่ อ่านอย่างเดียว)"],
           ["R", "ขวา = ช่องคำตอบ (วางคำตอบที่นี่)"],
-          ["1", "คลิกเลือกคำตอบใน คลังคำตอบ • PIT BANK (การ์ดที่เลือกจะมีขอบสีเหลือง)"],
-          ["2", "คลิกช่องคำตอบทางขวาที่ต้องการวาง (หรือลากการ์ดไปวางก็ได้)"],
-          ["3", "คลิกการ์ดเดิมซ้ำเพื่อยกเลิก • คลิกช่องที่มีคำตอบแล้วเพื่อแทนที่ • กด ✕ เพื่อเอาคำตอบออก"],
-          ["4", "ใส่ให้ครบทุกช่อง แล้วกด ตรวจสอบคำตอบ"],
+          ["1", "คลิกช่องว่างทางขวาที่ต้องการวาง"],
+          ["2", "เลือกคำตอบจาก popup ที่เปิดขึ้นมา — คำตอบจะถูกวางลงช่องนั้นทันที"],
+          ["3", "กด ✕ ที่มุมการ์ดเพื่อเอาคำตอบออก แล้วเลือกใหม่ได้"],
+          ["4", "ใส่คำตอบอย่างน้อย 1 ช่อง แล้วกด ตรวจสอบคำตอบ (CHECK) ได้เลย — ตรวจซ้ำได้เรื่อยๆ"],
         ] as const
       ).map(([k, v]) => (
         <div key={k} className="contents">
@@ -553,8 +437,9 @@ export function PlayPage() {
       )}
     >
       <F1Header />
-      <main className="flex w-full flex-col gap-4 px-6 py-6 lg:px-12 fit:min-h-0 fit:flex-1 fit:gap-2 fit:px-8 fit:py-2">
-        <div className="flex flex-col gap-4 fit:flex-row fit:items-center fit:gap-4">
+      <main className="flex w-full flex-col gap-4 px-6 py-6 lg:px-12 fit:gap-2 fit:px-8 fit:py-2">
+        {/* ปักหมุดไว้บนสุดด้วย sticky ให้กดตรวจคำตอบได้ตลอดเวลาแม้เลื่อนดูคำถามอยู่ */}
+        <div className="sticky top-0 z-20 -mx-6 flex flex-col gap-4 bg-f1-paper px-6 pb-2 lg:-mx-12 lg:px-12 fit:-mx-8 fit:flex-row fit:items-center fit:gap-4 fit:px-8">
           <div className="fit:shrink-0">
             <GameTitle name={game.name} />
             <p className="f1-font-display mt-1 text-sm font-medium tracking-widest text-f1-red fit:mt-0 fit:text-xs">
@@ -596,13 +481,38 @@ export function PlayPage() {
             )}
           </div>
 
-          <Button
-            variant="outline"
-            onClick={() => setShowHelp(true)}
-            className="f1-font-display hidden shrink-0 border-f1-ink bg-white text-f1-ink hover:bg-zinc-100 fit:inline-flex"
-          >
-            📋 วิธีเล่น
-          </Button>
+          <div className="flex shrink-0 flex-col items-end gap-1 fit:items-end">
+            {!locked && (
+              <p className="f1-font-display text-right text-xs text-f1-red">
+                {isAllFilled
+                  ? "ครบแล้ว! กดตรวจสอบได้เลย"
+                  : hasAnyPlaced
+                    ? `กดตรวจสอบได้เลย (วางแล้ว ${totalPlaced}/${totalSlots} ใบ)`
+                    : "⚠️ ยังไม่ได้ใส่คำตอบ"}
+              </p>
+            )}
+            <div className="flex shrink-0 gap-2">
+              {!locked && (
+                <Button
+                  disabled={!hasAnyPlaced}
+                  onClick={() => handleCheck(false)}
+                  className={cn(
+                    "f1-font-display",
+                    hasAnyPlaced ? "f1-glow bg-red-600 text-white hover:bg-red-700" : "bg-zinc-200 text-zinc-500",
+                  )}
+                >
+                  🏁 ตรวจสอบคำตอบ (CHECK)
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                onClick={() => setShowHelp(true)}
+                className="f1-font-display hidden shrink-0 border-f1-ink bg-white text-f1-ink hover:bg-zinc-100 fit:inline-flex"
+              >
+                📋 วิธีเล่น
+              </Button>
+            </div>
+          </div>
         </div>
 
         <div className="f1-font-display rounded-sm border border-f1-line bg-white p-4 text-sm text-f1-ink fit:hidden">
@@ -612,132 +522,175 @@ export function PlayPage() {
 
         <h2 className={sectionTitle}>📝 คำถาม • QUESTION ⟷ ✅ คำตอบ • ANSWER</h2>
 
-        <div className="grid gap-x-12 gap-y-4 xl:grid-cols-2 fit:min-h-0 fit:max-h-[calc(0.675*(100vw_-_88px)_+_24px)] fit:flex-1 fit:grid-cols-2 fit:grid-rows-4 fit:gap-x-6 fit:gap-y-2">
-          {[0, 1].map((n) => (
-            <div
-              key={n}
-              className={cn(
-                "f1-font-display grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-3 px-1 text-xs font-medium tracking-wide text-f1-red lg:gap-6",
-                n === 1 && "hidden xl:grid",
-                "fit:hidden!",
-              )}
-            >
-              <span># · 📝 คำถาม (ซ้าย)</span>
-              <span>⟷</span>
-              <span className="text-center">✅ คำตอบ (ขวา)</span>
-            </div>
-          ))}
+        <div className="grid gap-y-2">
+          <div className="f1-font-display grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-3 px-1 text-xs font-medium tracking-wide text-f1-red lg:gap-6">
+            <span># · 📝 คำถาม (ซ้าย)</span>
+            <span>⟷</span>
+            <span className="text-center">✅ คำตอบ (ขวา)</span>
+          </div>
           {game.pairs.map((pair, idx) => {
-            const occupantId = slots[pair.id];
-            const occupantChip = occupantId ? chips.find((c) => c.id === occupantId) : undefined;
+            const occupantIds = slots[pair.id] ?? [];
+            const occupantChips = occupantIds
+              .map((id) => chips.find((c) => c.id === id))
+              .filter((c): c is Chip => Boolean(c));
+            const capacity = pair.answers.length;
+            const isMulti = capacity > 1;
             const isLocked = lockedCorrect.has(pair.id);
             const isWrong = wrongBoxIds.has(pair.id);
             return (
               <div key={pair.id} className={rowGrid}>
                 {renderQuestion(pair, idx)}
-                <span className="f1-font-mono self-center text-f1-red fit:shrink-0">⟷</span>
-                <div className="relative fit:aspect-video fit:h-full fit:shrink-0">
-                  <div
-                    data-dropbox-id={pair.id}
-                    onClick={() => handleSlotClick(pair.id)}
-                    className={cn(
-                      "flex aspect-video w-full items-center justify-center fit:aspect-auto fit:h-full rounded-xl border-4 border-dashed border-[#8B8B95] bg-white/70 text-sm transition-colors",
-                      occupantChip && "border-solid border-f1-ink bg-white",
-                      selectedId && !isLocked && "f1-slot-blink cursor-pointer",
-                      isLocked && "f1-correct-bounce border-solid border-[#15803D] bg-f1-ok-bg",
-                      !isLocked && isWrong && "f1-shake border-solid border-[#DC0000] bg-[#DC0000]/10",
-                      !isLocked && !isWrong && hoverBoxId === pair.id && "border-[#DC0000] bg-[#DC0000]/10",
+                <span className="f1-font-mono self-center text-f1-red">⟷</span>
+                {!isMulti ? (
+                  <div className="relative h-full">
+                    <div
+                      data-dropbox-id={pair.id}
+                      onClick={() => {
+                        if (!occupantChips[0]) handleSlotClick(pair.id);
+                      }}
+                      className={cn(
+                        "flex h-full w-full items-center justify-center rounded-xl border-4 border-dashed border-[#8B8B95] bg-white/70 text-sm transition-colors",
+                        !occupantChips[0] && "cursor-pointer",
+                        occupantChips.length > 0 && "border-solid border-f1-ink bg-white",
+                        isLocked && "f1-correct-bounce border-solid border-[#15803D] bg-f1-ok-bg",
+                        !isLocked && isWrong && "f1-shake border-solid border-[#DC0000] bg-[#DC0000]/10",
+                      )}
+                    >
+                      {occupantChips[0] ? (
+                        renderChip(occupantChips[0])
+                      ) : (
+                        <span className="f1-font-mono px-2 text-center text-xs text-[#8B8B95]">
+                          คลิกช่องเพื่อเลือกคำตอบ
+                        </span>
+                      )}
+                    </div>
+                    {occupantChips[0] && !isLocked && !locked && (
+                      <button
+                        type="button"
+                        onClick={() => removeChipFromSlot(pair.id, occupantChips[0].id)}
+                        className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-[#DC0000] text-xs font-bold text-white"
+                        aria-label="ลบการ์ดออกจากช่อง"
+                      >
+                        ✕
+                      </button>
                     )}
-                  >
-                    {occupantChip ? (
-                      renderChip(occupantChip, true)
-                    ) : (
-                      <span className="f1-font-mono text-xs text-[#8B8B95]">___</span>
+                    {isLocked && (
+                      <div className="f1-checkered-flash pointer-events-none absolute inset-0 rounded-xl" />
+                    )}
+                    {!isLocked && isWrong && (
+                      <div className="f1-redflag-flash pointer-events-none absolute inset-0 rounded-xl" />
+                    )}
+                    {occupantChips[0] && isLocked && (
+                      <span className="absolute -bottom-2 -right-2 flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#15803D] text-sm font-bold text-white shadow">
+                        ✓
+                      </span>
+                    )}
+                    {occupantChips[0] && !isLocked && isWrong && (
+                      <span className="absolute -bottom-2 -right-2 flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#DC0000] text-sm font-bold text-white shadow">
+                        ✗
+                      </span>
                     )}
                   </div>
-                  {occupantChip && !isLocked && !locked && (
-                    <button
-                      type="button"
-                      onClick={() => removeFromSlot(pair.id)}
-                      className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-[#DC0000] text-xs font-bold text-white"
-                      aria-label="ลบการ์ดออกจากช่อง"
-                    >
-                      ✕
-                    </button>
-                  )}
-                  {isLocked && (
-                    <div className="f1-checkered-flash pointer-events-none absolute inset-0 rounded-xl" />
-                  )}
-                  {!isLocked && isWrong && (
-                    <div className="f1-redflag-flash pointer-events-none absolute inset-0 rounded-xl" />
-                  )}
-                </div>
+                ) : (
+                  // 1 คำถามมีหลายคำตอบ — แสดงเป็นช่องแยกต่อการ์ด (ไม่ใช่กล่องเดียวรวมกัน) จำนวนช่อง = จำนวนคำตอบที่ต้องการ
+                  // ทุกช่องใช้ data-dropbox-id เดียวกัน (= pair.id) เพราะวางการ์ดถูกช่องไหนก็ได้ในแถวเดียวกัน
+                  <div
+                    className={cn(
+                      "relative grid h-full gap-2 rounded-xl p-1 transition-colors",
+                      isLocked && "f1-correct-bounce",
+                      !isLocked && isWrong && "f1-shake",
+                    )}
+                    style={{ gridTemplateColumns: `repeat(${capacity}, minmax(0, 1fr))` }}
+                  >
+                    {Array.from({ length: capacity }, (_, i) => {
+                      const chip = occupantChips[i];
+                      const isWrongCard = Boolean(chip) && wrongChipIds.has(chip!.id);
+                      return (
+                        <div
+                          key={i}
+                          data-dropbox-id={pair.id}
+                          onClick={() => {
+                            if (!chip) handleSlotClick(pair.id);
+                          }}
+                          className={cn(
+                            "relative flex h-full items-center justify-center rounded-lg border-4 border-dashed border-[#8B8B95] bg-white/70 text-sm transition-colors",
+                            !chip && "cursor-pointer",
+                            chip && "border-solid border-f1-ink bg-white",
+                            isLocked && "border-solid border-[#15803D] bg-f1-ok-bg",
+                            isWrongCard && "border-solid border-[#DC0000] bg-[#DC0000]/10",
+                          )}
+                        >
+                          {chip ? (
+                            renderChip(chip)
+                          ) : (
+                            <span className="f1-font-mono px-1 text-center text-[10px] text-[#8B8B95]">
+                              คลิกช่องเพื่อเลือกคำตอบ
+                            </span>
+                          )}
+                          {chip && !isLocked && !locked && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeChipFromSlot(pair.id, chip.id);
+                              }}
+                              className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-[#DC0000] text-[10px] font-bold text-white"
+                              aria-label="ลบการ์ดออกจากช่อง"
+                            >
+                              ✕
+                            </button>
+                          )}
+                          {chip && isLocked && (
+                            <span className="absolute -bottom-2 -right-2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-[#15803D] text-xs font-bold text-white shadow">
+                              ✓
+                            </span>
+                          )}
+                          {isWrongCard && (
+                            <span className="absolute -bottom-2 -right-2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-[#DC0000] text-xs font-bold text-white shadow">
+                              ✗
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {isLocked && (
+                      <div className="f1-checkered-flash pointer-events-none absolute inset-0 rounded-xl" />
+                    )}
+                    {!isLocked && isWrong && (
+                      <div className="f1-redflag-flash pointer-events-none absolute inset-0 rounded-xl" />
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
 
-        <div className="flex flex-col gap-2 fit:flex-row fit:items-baseline fit:gap-3">
-          <h2 className={sectionTitle}>📦 คลังคำตอบ • PIT BANK</h2>
-          <p className="f1-font-display text-sm text-f1-mute fit:text-xs">คลิกเลือก → แล้วคลิกช่องในคอลัมน์ขวา</p>
-        </div>
-
-        <div className="min-h-20 flex flex-wrap gap-2 rounded-sm border-t-4 border-[#DC0000] bg-white/90 p-4 lg:gap-4 lg:p-6 fit:min-h-[7.75rem] fit:min-[1700px]:min-h-[4.75rem] fit:gap-2 fit:p-2">
-          {pool.length === 0 && phase !== "finished" && (
-            <span className="f1-font-display text-sm text-[#8B8B95]">คลังว่าง — ใส่ครบทุกช่องแล้ว</span>
-          )}
-          {pool.map((chip) => renderChip(chip))}
-        </div>
-
         <div className="flex flex-col gap-4 fit:flex-row fit:items-center fit:gap-4">
-        <h2 className={cn(sectionTitle, "fit:shrink-0")}>🚦 RACE CONTROL • ตรวจคำตอบ</h2>
+        <h2 className={cn(sectionTitle, "fit:shrink-0")}>🚦 RACE CONTROL</h2>
 
-        <div className="flex flex-col items-center gap-3 fit:contents">
+        <div className="flex flex-wrap justify-center gap-2 fit:ml-auto fit:shrink-0">
           {!locked && (
-            <p className="f1-font-display text-center text-sm text-f1-red fit:flex-1 fit:text-left fit:text-xs fit:2xl:text-sm">
-              {isAllFilled
-                ? "ครบแล้ว! กดตรวจสอบได้เลย"
-                : `⚠️ ใส่ให้ครบ ${total} ช่องก่อนส่ง (ตอนนี้ ${filledCount}/${total}) – คลิกคำตอบในคลังแล้วคลิกช่องทางขวา`}
-            </p>
-          )}
-          <div className="flex flex-wrap justify-center gap-2 fit:ml-auto fit:shrink-0">
-            {!locked && (
-              <Button
-                disabled={!isAllFilled}
-                onClick={() => handleCheck(false)}
-                className={cn(
-                  "f1-font-display",
-                  isAllFilled ? "f1-glow bg-red-600 text-white hover:bg-red-700" : "bg-zinc-200 text-zinc-500",
-                )}
-              >
-                🏁 ตรวจสอบคำตอบ (CHECK)
-              </Button>
-            )}
-            {!locked && (
-              <Button
-                variant="outline"
-                className="f1-font-display border-f1-line-strong bg-white text-f1-ink hover:bg-zinc-100"
-                onClick={clearAnswers}
-              >
-                ล้างคำตอบ
-              </Button>
-            )}
             <Button
               variant="outline"
-              className="f1-font-display border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
-              onClick={resetAll}
+              className="f1-font-display border-f1-line-strong bg-white text-f1-ink hover:bg-zinc-100"
+              onClick={clearAnswers}
             >
-              รีเซ็ตทั้งหมด
+              ล้างคำตอบ
             </Button>
-          </div>
+          )}
+          <Button
+            variant="outline"
+            className="f1-font-display border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
+            onClick={resetAll}
+          >
+            รีเซ็ตทั้งหมด
+          </Button>
         </div>
         </div>
 
         <div className="f1-font-display space-y-1 pt-4 text-xs text-f1-mute fit:flex fit:justify-between fit:gap-6 fit:space-y-0 fit:overflow-hidden fit:whitespace-nowrap fit:pt-0 fit:text-[10px]">
-          <p>
-            * ซ้าย = คำถามคงที่ • ขวา = คำตอบ • คลิกเลือกจากคลังล่างแล้วคลิกช่องที่จะวาง • หากผิด
-            ระบบจะแนะนำวิดีโอสอนเฉพาะข้อที่ผิด
-          </p>
+          <p>* ซ้าย = คำถามคงที่ • ขวา = คำตอบ • คลิกช่องว่างเพื่อเลือกคำตอบ</p>
           <p>I-DOJO F1 RACING RED • LEFT QUESTION • RIGHT ANSWER • FERRARI RED #DC0000 • GREEN #22C55E</p>
         </div>
       </main>
@@ -761,6 +714,55 @@ export function PlayPage() {
             </button>
             <h2 className="mb-3 font-bold text-f1-red">📋 วิธีเล่น (แบบคลิก)</h2>
             {howToList}
+          </div>
+        </div>
+      )}
+
+      {pickerBoxId && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-black/70 p-4"
+          onClick={() => setPickerBoxId(null)}
+        >
+          <div
+            className="f1-font-display relative my-auto w-full max-w-3xl rounded-sm border-4 border-[#DC0000] bg-white p-4 text-f1-ink"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setPickerBoxId(null)}
+              className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-[#DC0000] font-bold text-white"
+              aria-label="ปิด"
+            >
+              ✕
+            </button>
+            <h3 className="mb-3 text-center text-lg font-bold text-f1-red">เลือกคำตอบใส่ช่องนี้</h3>
+            {pool.length === 0 ? (
+              <p className="py-6 text-center text-sm text-[#8B8B95]">คลังว่างแล้ว — ไม่มีคำตอบให้เลือก</p>
+            ) : (
+              <div className="grid max-h-[65vh] grid-cols-2 gap-3 overflow-y-auto p-1 sm:grid-cols-3">
+                {pool.map((chip) => (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    onClick={() => pickForBox(chip.id)}
+                    className="flex flex-col overflow-hidden rounded-md border-2 border-f1-line text-left hover:border-[#DC0000]"
+                  >
+                    {chip.image && (
+                      <img
+                        src={chip.image}
+                        alt=""
+                        draggable={false}
+                        className="aspect-video w-full bg-zinc-100 object-contain"
+                      />
+                    )}
+                    <span className="p-2 text-sm font-bold">
+                      <span className="mr-1 text-f1-red">{chip.letter}.</span>
+                      {chip.text}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -831,37 +833,70 @@ export function PlayPage() {
               </div>
             </div>
 
-            {modalData.wrong.length > 0 && (
-              <>
-                <p className="mt-4 text-center font-bold text-f1-bad">
-                  มีคำตอบผิด! {modalData.wrong.length} ข้อ
-                </p>
-                <div className="mt-2 max-h-[40vh] space-y-3 overflow-y-auto pr-1">
-                  {modalData.wrong.map((w) => {
-                    const pair = game.pairs.find((p) => p.id === w.pairId);
-                    return (
-                      <div key={w.pairId} className="space-y-2 rounded-sm border border-f1-line bg-zinc-100 p-3">
-                        <h4 className="font-bold">🏷️ {w.topic}</h4>
-                        <p className="rounded-sm border border-red-200 bg-f1-bad-bg px-2 py-1 text-sm text-f1-bad">
-                          ❌ {w.yourAnswer ?? "(ยังไม่ได้ใส่)"}
-                        </p>
-                        <p className="rounded-sm border border-green-200 bg-f1-ok-bg px-2 py-1 text-sm text-f1-ok-ink">
-                          ✅ {w.correctAnswer}
-                        </p>
-                        {w.hasVideo && (
-                          <Button
-                            size="sm"
-                            className="bg-[#DC0000] text-white hover:bg-[#b00000]"
-                            onClick={() => openVideo(w.pairId)}
-                          >
-                            ▶️ ดูวิดีโอสอน{pair?.videoTitle ? `: ${pair.videoTitle}` : ""}
-                          </Button>
+            <p className="mt-4 text-center font-bold text-f1-red">ผลตรวจทีละข้อ</p>
+            <div className="mt-2 max-h-[40vh] space-y-3 overflow-y-auto pr-1">
+              {game.pairs.map((pair) => {
+                const isCorrect = lockedCorrect.has(pair.id);
+                const w = modalData.wrong.find((x) => x.pairId === pair.id);
+                const hasWrongCard = w?.placedCards.some((c) => !c.correct) ?? false;
+                return (
+                  <div key={pair.id} className="space-y-2 rounded-sm border border-f1-line bg-zinc-100 p-3">
+                    <h4 className="font-bold">🏷️ {pair.promptText || "(ภาพ)"}</h4>
+                    {isCorrect ? (
+                      <p className="rounded-sm border border-green-200 bg-f1-ok-bg px-2 py-1 text-sm text-f1-ok-ink">
+                        ✅ ถูกแล้ว
+                      </p>
+                    ) : w && w.placedCards.length > 0 ? (
+                      // แสดงการ์ดที่วางไว้ทีละใบ บอกถูก/ผิดเป็นรายใบ ไม่รวมเป็นก้อนเดียว
+                      <>
+                        <div className="flex flex-wrap gap-1.5">
+                          {w.placedCards.map((c, i) => (
+                            <span
+                              key={i}
+                              className={cn(
+                                "rounded-sm border px-2 py-1 text-sm",
+                                c.correct
+                                  ? "border-green-200 bg-f1-ok-bg text-f1-ok-ink"
+                                  : "border-red-200 bg-f1-bad-bg text-f1-bad",
+                              )}
+                            >
+                              {c.correct ? "✅" : "❌"} {c.label}
+                            </span>
+                          ))}
+                        </div>
+                        {!hasWrongCard && w.missingCount > 0 && (
+                          <p className="text-xs text-amber-700">⚠️ ถูกหมดแล้ว แต่ยังขาดอีก {w.missingCount} ใบ</p>
                         )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
+                        {showAnswerKey && (
+                          <div className="flex flex-wrap gap-1.5 pt-1">
+                            {w.correctCards.map((label, i) => (
+                              <span
+                                key={i}
+                                className="rounded-sm border border-green-200 bg-f1-ok-bg px-2 py-1 text-sm text-f1-ok-ink"
+                              >
+                                ✅ {label}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p className="rounded-sm border border-f1-line bg-white px-2 py-1 text-sm text-f1-mute">
+                        ⬜ ยังไม่ได้ใส่คำตอบ
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {modalData.wrong.length > 0 && !showAnswerKey && (
+              <Button
+                className="f1-font-display mt-4 w-full bg-[#DC0000] text-white hover:bg-[#b00000]"
+                onClick={() => setShowAnswerKey(true)}
+              >
+                👁️ เฉลย
+              </Button>
             )}
 
             <div className="mt-5 flex justify-center gap-2">
@@ -875,41 +910,6 @@ export function PlayPage() {
               {!modalData.allCorrect && !modalData.isTimeout && (
                 <Button className="bg-[#DC0000] text-white hover:bg-[#b00000]" onClick={retryWrongOnly}>
                   ลองใหม่เฉพาะข้อผิด
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {videoPair?.videoUrl && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-black/90 p-4">
-          <div className="f1-font-display relative my-auto w-full max-w-2xl rounded-sm border-4 border-[#DC0000] bg-white p-4 text-f1-ink">
-            <button
-              type="button"
-              onClick={() => setVideoView(null)}
-              className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-[#DC0000] font-bold text-white"
-              aria-label="ปิดวิดีโอ"
-            >
-              ✕
-            </button>
-            <VideoPlayer url={videoPair.videoUrl} className="mt-6" />
-            <h3 className="mt-3 text-lg font-bold">{videoPair.videoTitle || videoPair.promptText}</h3>
-            {videoPair.videoDesc && <p className="mt-1 text-sm text-f1-mute">{videoPair.videoDesc}</p>}
-            <div className="mt-4 flex justify-end gap-2">
-              <Button
-                variant="outline"
-                className="border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
-                onClick={() => setVideoView(null)}
-              >
-                เข้าใจแล้ว ✓
-              </Button>
-              {hasNextVideo && videoView && (
-                <Button
-                  className="bg-f1-ink text-white hover:bg-zinc-700"
-                  onClick={() => setVideoView({ ...videoView, index: videoView.index + 1 })}
-                >
-                  ข้อต่อไป →
                 </Button>
               )}
             </div>

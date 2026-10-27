@@ -1,4 +1,4 @@
-import type { MatchPair, PromptType, Theme } from "../types/theme";
+import type { AnswerOption, MatchPair, PromptType, Theme } from "../types/theme";
 
 // key เดิมตอนยังเก็บใน localStorage — เหลือไว้อ่านเพื่อย้ายข้อมูลขึ้น server เท่านั้น (readLegacyLocalGame)
 export const PAIRS_KEY = "f1-dojo-pairs-v4-click-match";
@@ -7,17 +7,22 @@ const DEFAULT_NAME = "DOJO · F1 RACING RED";
 const DEFAULT_TIME = 300;
 
 // crypto.randomUUID ใช้ได้เฉพาะ secure context — เปิดผ่าน http://<IP ของ Pi> จะไม่มี
-function genId(): string {
+export function genId(): string {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
+export function makeEmptyAnswer(): AnswerOption {
+  return { id: genId(), type: "text", text: "" };
+}
+
 export function makeEmptyPair(): MatchPair {
-  return { id: genId(), promptType: "text", promptText: "", answerType: "text", answerText: "" };
+  return { id: genId(), promptType: "text", promptText: "", answers: [makeEmptyAnswer()] };
 }
 
 // ===== รูปแบบข้อมูลสำหรับ Import/Export (ตามโครงสร้าง EDIT MODE) =====
 interface SpecSide {
+  id?: string;
   type?: string;
   text?: string;
   imageUrl?: string;
@@ -26,10 +31,9 @@ interface SpecSide {
 export interface SpecRecord {
   id?: string;
   question?: SpecSide;
+  // answer = รูปแบบเก่า (คำตอบเดียว) เหลือไว้อ่านข้อมูลเดิม ไม่เขียนออกแล้ว — ดู fromAnyRecord
   answer?: SpecSide;
-  videoUrl?: string;
-  videoTitle?: string;
-  videoDesc?: string;
+  answers?: SpecSide[];
 }
 
 function svg(markup: string, width = 320): string {
@@ -77,24 +81,20 @@ const IMG_TROPHY = svg(
 );
 
 function seedPairs(): MatchPair[] {
-  type TextSeed = [string, string, string, string, string];
+  type TextSeed = [string, string];
   const textSeeds: TextSeed[] = [
-    ["DRS", "ระบบลดแรงต้านอากาศ", "8h5d1v9T0eY", "DRS คืออะไร? ทำไมถึงแซงได้ง่าย", "การทำงานของ Drag Reduction System วิธีเปิดใช้ และจุดตรวจจับบนแทร็ก"],
-    ["ERS", "ระบบคืนพลังงานไฟฟ้า", "0h0X8q1j3wQ", "ERS ระบบไฮบริดหัวใจของ F1", "เจาะลึก MGU-K และ MGU-H วิธีเก็บและปล่อยพลังงาน 160 แรงม้า"],
-    ["Undercut", "กลยุทธ์เข้าพิตก่อนเพื่อแซง", "dQw4w9WgXcQ", "Undercut vs Overcut วางแผนยังไงให้ชนะ", "กลยุทธ์พิตสต็อปที่ Ferrari และ Red Bull ใช้บ่อยที่สุด"],
-    ["Pole Position", "ออกตัวอันดับ 1 จากควอลิฟาย", "jNQXAC9IVRw", "ทำไม Pole ถึงสำคัญที่โมนาโก", "สถิติการชนะจากโพล และเทคนิคทำเวลาต่อรอบ"],
-    ["Safety Car", "รถนำขบวนช่วงอุบัติเหตุ", "9bZkp7q19f0", "Safety Car เปลี่ยนเกมการแข่งขันยังไง", "กฎ Safety Car และ Virtual Safety Car"],
-    ["DRS Zone", "โซนที่อนุญาตให้เปิด DRS", "3JZ_D3ELwOQ", "อ่าน DRS Detection Point ให้เป็น", "ดูกราฟิกบนจอให้รู้ว่ารถคันไหนเปิด DRS ได้"],
+    ["DRS", "ระบบลดแรงต้านอากาศ"],
+    ["ERS", "ระบบคืนพลังงานไฟฟ้า"],
+    ["Undercut", "กลยุทธ์เข้าพิตก่อนเพื่อแซง"],
+    ["Pole Position", "ออกตัวอันดับ 1 จากควอลิฟาย"],
+    ["Safety Car", "รถนำขบวนช่วงอุบัติเหตุ"],
+    ["DRS Zone", "โซนที่อนุญาตให้เปิด DRS"],
   ];
-  const pairs: MatchPair[] = textSeeds.map(([q, a, vid, title, desc], i) => ({
+  const pairs: MatchPair[] = textSeeds.map(([q, a], i) => ({
     id: `p${i + 1}`,
     promptType: "text",
     promptText: q,
-    answerType: "text",
-    answerText: a,
-    videoUrl: `https://www.youtube.com/embed/${vid}`,
-    videoTitle: title,
-    videoDesc: desc,
+    answers: [{ id: genId(), type: "text", text: a }],
   }));
   pairs.push(
     {
@@ -102,24 +102,14 @@ function seedPairs(): MatchPair[] {
       promptType: "image",
       promptText: "Ferrari SF-23",
       promptImage: IMG_FERRARI_CAR,
-      answerType: "image",
-      answerText: "Ferrari",
-      answerImage: IMG_FERRARI_LOGO,
-      videoUrl: "https://www.youtube.com/embed/8h5d1v9T0eY",
-      videoTitle: "จับคู่ภาพ: รถแข่ง → ทีมผู้ผลิต",
-      videoDesc: "ตัวอย่างโหมดจับคู่ภาพ",
+      answers: [{ id: genId(), type: "image", text: "Ferrari", image: IMG_FERRARI_LOGO }],
     },
     {
       id: "p8",
       promptType: "mixed",
       promptText: "ทีมแชมป์โลก 2023 คือ?",
       promptImage: IMG_TROPHY,
-      answerType: "image",
-      answerText: "Red Bull Racing",
-      answerImage: IMG_REDBULL,
-      videoUrl: "https://www.youtube.com/embed/0h0X8q1j3wQ",
-      videoTitle: "Mixed Mode: ภาพ + ข้อความ → ภาพ",
-      videoDesc: "โจทย์มีภาพและข้อความ คำตอบเป็นภาพ",
+      answers: [{ id: genId(), type: "image", text: "Red Bull Racing", image: IMG_REDBULL }],
     },
   );
   return pairs;
@@ -129,10 +119,7 @@ export function toSpecRecord(pair: MatchPair): SpecRecord {
   return {
     id: pair.id,
     question: { type: pair.promptType, text: pair.promptText, imageUrl: pair.promptImage ?? "" },
-    answer: { type: pair.answerType, text: pair.answerText, imageUrl: pair.answerImage ?? "" },
-    videoUrl: pair.videoUrl ?? "",
-    videoTitle: pair.videoTitle ?? "",
-    videoDesc: pair.videoDesc ?? "",
+    answers: pair.answers.map((a) => ({ id: a.id, type: a.type, text: a.text, imageUrl: a.image ?? "" })),
   };
 }
 
@@ -148,21 +135,43 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-// รองรับทั้งรูปแบบใหม่ (question/answer เป็น object) และรูปแบบเก่า (topic/answer เป็นข้อความ)
+function toAnswerOption(raw: unknown): AnswerOption {
+  const r = isObject(raw) ? raw : {};
+  return {
+    id: typeof r.id === "string" ? r.id : genId(),
+    type: normalizeType(r.type),
+    text: String(r.text ?? ""),
+    image: optString(r.imageUrl),
+  };
+}
+
+// รองรับ 3 รูปแบบ: (1) answers[] ใหม่ (2) answer object เดี่ยวรูปแบบก่อนหน้า (3) answer เป็นข้อความล้วนแบบเก่าสุด
+function extractAnswers(record: Record<string, unknown>): AnswerOption[] {
+  if (Array.isArray(record.answers) && record.answers.length > 0) {
+    return record.answers.map(toAnswerOption);
+  }
+  if (isObject(record.answer)) {
+    return [toAnswerOption(record.answer)];
+  }
+  return [
+    {
+      id: genId(),
+      type: normalizeType(record.answerType),
+      text: String((typeof record.answer === "string" ? record.answer : record.answerText) ?? ""),
+      image: optString(record.answerImage),
+    },
+  ];
+}
+
+// รองรับทั้งรูปแบบใหม่ (question เป็น object) และรูปแบบเก่า (topic เป็นข้อความ)
 function fromAnyRecord(record: Record<string, unknown>): MatchPair {
   const q = isObject(record.question) ? record.question : undefined;
-  const a = isObject(record.answer) ? record.answer : undefined;
   return {
     id: typeof record.id === "string" || typeof record.id === "number" ? String(record.id) : genId(),
     promptType: normalizeType(q ? q.type : (record.type ?? record.promptType)),
     promptText: String((q ? q.text : (record.topic ?? record.promptText)) ?? ""),
     promptImage: optString(q ? q.imageUrl : (record.imageUrl ?? record.promptImage)),
-    answerType: normalizeType(a ? a.type : record.answerType),
-    answerText: String((a ? a.text : (typeof record.answer === "string" ? record.answer : record.answerText)) ?? ""),
-    answerImage: optString(a ? a.imageUrl : record.answerImage),
-    videoUrl: optString(record.videoUrl),
-    videoTitle: optString(record.videoTitle),
-    videoDesc: optString(record.videoDesc),
+    answers: extractAnswers(record),
   };
 }
 
@@ -192,12 +201,6 @@ export class NoGameError extends Error {
   }
 }
 
-export class UnauthorizedError extends Error {
-  constructor() {
-    super("รหัสผู้ดูแลไม่ถูกต้อง");
-  }
-}
-
 function toPayload(game: Theme) {
   return { name: game.name, timeLimitSeconds: game.timeLimitSeconds, pairs: game.pairs.map(toSpecRecord) };
 }
@@ -215,7 +218,6 @@ function fromPayload(data: unknown): Theme {
 }
 
 async function failure(res: Response, what: string): Promise<Error> {
-  if (res.status === 401) return new UnauthorizedError();
   let detail = "";
   try {
     const body = await res.json();
@@ -235,31 +237,23 @@ export async function getGame(): Promise<Theme> {
   return game;
 }
 
-export async function saveGame(game: Theme, adminSecret: string): Promise<Theme> {
+export async function saveGame(game: Theme): Promise<Theme> {
   const res = await fetch(`${API}/game`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", "x-admin-secret": adminSecret },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(toPayload(game)),
   });
   if (!res.ok) throw await failure(res, "บันทึก");
   return { ...game, updatedAt: Date.now() };
 }
 
-export async function verifyAdmin(adminSecret: string): Promise<boolean> {
-  const res = await fetch(`${API}/admin/check`, { headers: { "x-admin-secret": adminSecret } });
-  if (res.status === 401) return false;
-  if (!res.ok) throw await failure(res, "ตรวจรหัส");
-  return true;
-}
-
 // คืน URL ของรูปบน server (/I-DOJO/api/uploads/<file>) ไว้เก็บแทน base64
-export async function uploadImage(file: Blob, adminSecret: string): Promise<string> {
+export async function uploadImage(file: Blob): Promise<string> {
   const form = new FormData();
   const name = file instanceof File ? file.name : "image.jpg";
   form.append("image", file, name);
   const res = await fetch(`${API}/upload`, {
     method: "POST",
-    headers: { "x-admin-secret": adminSecret },
     body: form,
   });
   if (!res.ok) throw await failure(res, "อัปโหลดรูป");
@@ -297,7 +291,11 @@ function sideComplete(type: PromptType, text: string, image?: string): boolean {
 }
 
 export function isPairComplete(p: MatchPair): boolean {
-  return sideComplete(p.promptType, p.promptText, p.promptImage) && sideComplete(p.answerType, p.answerText, p.answerImage);
+  return (
+    sideComplete(p.promptType, p.promptText, p.promptImage) &&
+    p.answers.length > 0 &&
+    p.answers.every((a) => sideComplete(a.type, a.text, a.image))
+  );
 }
 
 export function parseImportedPairs(raw: string): MatchPair[] {

@@ -150,7 +150,7 @@ export function forwardKeys() {
 - [x] `portalBridge.ts` + เรียกใน `PlayPage` (ส่งเฉพาะตอนถูกฝัง)
 - [x] pass ตอนถูกครบ · fail ตอนหมดเวลา · ไม่ส่งตอนผิดแต่เวลาเหลือ · กันส่งซ้ำ · แสดงสถานะ ack
 - [x] ส่งต่อ Enter/Space
-- [x] ย้ายชุดคำถาม + รูปไป backend (ข้อ 5) พร้อมป้องกันการบันทึก — `GET/PUT /api/game` + `x-admin-secret` (ผู้ดูแลกรอกรหัสในหน้า editor)
+- [x] ย้ายชุดคำถาม + รูปไป backend (ข้อ 5) — `GET/PUT /api/game` (ตัดระบบ `x-admin-secret` ออกแล้วตามคำขอ 2026-10-22 — `/I-DOJO/editor` ไม่มีการตรวจสิทธิ์อีกต่อไป ใครในวง LAN เข้าถึงได้ก็แก้ได้)
 - [ ] ทดสอบเดี่ยว + ทดสอบกับ portal (ข้อ 7) + เปิดเกมตรง ๆ ยังใช้ได้ — ทดสอบเดี่ยวผ่านแล้วบนเครื่อง dev (headless Chrome + DB จำลอง, 2026-10-17) · **ยังไม่ได้ทดสอบบน Pi จริงและกับ portal จริง**
 - [x] `npm run build` (base `/I-DOJO/`) · อัปเดต `CHANGELOG.md` · ถ้าเปลี่ยน env/route อัปเดต `DEPLOYMENT.md`
 - [ ] แจ้ง portal ถ้าต้องเปลี่ยนสัญญา — อย่าเปลี่ยนรูปแบบข้อความเอง (portal ตรวจ `version: 1` ตรงตัว)

@@ -35,7 +35,7 @@
 - Entry: `backend/index.js`
 - ตอนเริ่มจะสร้างตาราง `records`, `app_config` และ `game` เองถ้ายังไม่มี
 - ชุดคำถามของเกมเก็บในตาราง `game` (แถวเดียว, JSON) ผ่าน `GET /api/game` (404 = ยังไม่มี) และ `PUT /api/game`
-- `PUT /api/game`, `POST /api/upload`, `GET /api/admin/check`, `DELETE /api/records` ต้องส่ง header `x-admin-secret` ตรงกับ `ADMIN_SECRET` — ผู้ดูแลกรอกรหัสนี้ในหน้า `/I-DOJO/editor` (ไม่ได้ฝังใน frontend) ถ้า `ADMIN_SECRET` ว่างจะบันทึกไม่ได้เลย
+- `/I-DOJO/editor` ไม่มีการตรวจสิทธิ์ — ใครเข้าถึง URL นี้ได้ (วง LAN) ก็แก้ชุดคำถาม/อัปโหลดรูป/ลบ records ได้ทันที (ตัดระบบ `ADMIN_SECRET` ออกแล้วตามคำขอ — ดู `CHANGELOG.md`)
 - Config อยู่ใน `backend/.env` (ไม่ commit, permission `600`, owner `idojo`)
 - ต้องมี `backend/.env.example` ที่ระบุ key ทุกตัวโดยไม่มีค่าจริง
 
@@ -47,11 +47,9 @@ DB_HOST=localhost
 DB_USER=idojo
 DB_PASS=
 DB_NAME=pit5_station
-ADMIN_SECRET=
 ```
 
 - ไม่มี `DB_PORT` — โค้ดไม่ได้อ่าน ใช้ default ของ mariadb (3306)
-- `ADMIN_SECRET` = รหัสผู้ดูแลสำหรับบันทึกชุดคำถาม/อัปโหลดรูป (ดูข้างบน)
 - ไฟล์ที่อัปโหลดเก็บใน `backend/uploads/` (relative กับ working dir ของ PM2 จึงต้อง `pm2 start` จากใน `backend/`) เปิดได้ที่ `/I-DOJO/api/uploads/<file>`
 - Express ยังเสิร์ฟ `backend/build` ที่ `/I-DOJO` ด้วย (ไว้ทดสอบตรง port 5000 โดยไม่มี Apache) และตัด `/I-DOJO` ออกจาก `/I-DOJO/api/...` เองแบบเดียวกับ Apache — บน Pi ส่วนนี้ Apache เสิร์ฟเอง
 - เกมถูกฝังเป็น iframe บนจอ Station ของ portal — **ห้ามเพิ่ม `X-Frame-Options` หรือ CSP `frame-ancestors`** ใน Apache (ดู `PORTAL_INTEGRATION.md`)
