@@ -5,6 +5,7 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 
@@ -22,19 +23,13 @@ app.use((req, res, next) => {
 app.use(cors());
 // ชุดคำถามเก่า/ที่ import มาอาจยังมีรูปเป็น base64 ฝังอยู่ จึงเผื่อขนาดไว้
 app.use(express.json({ limit: '10mb' }));
-// อยู่ใต้ /api/ เพื่อให้ Apache บน Pi proxy มาถึง (/I-DOJO/api/uploads/<file>)
+// รูปที่อัปโหลดใหม่เก็บใน DB (ตาราง images) แล้ว — เหลือเสิร์ฟโฟลเดอร์นี้ไว้เผื่อชุดคำถามเก่าที่ยังอ้างอิงไฟล์อยู่
 app.use('/api/uploads', express.static('uploads'));
 
 // ========== Multer config ==========
-if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
-});
-
+// เก็บไฟล์ไว้ใน memory แล้วค่อยเขียนลง DB (ตาราง images) ไม่เขียนลงดิสก์แล้ว
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
@@ -110,7 +105,16 @@ async function initDB() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )
   `);
-  console.log('DB ready — records, app_config & game tables ensured');
+  // รูปที่อัปโหลดจากหน้า editor — เก็บตัวไฟล์จริงในนี้ (ไม่เขียนลงดิสก์) question/answer อ้างอิงกลับมาด้วย /api/images/<id>
+  await query(`
+    CREATE TABLE IF NOT EXISTS images (
+      id          VARCHAR(36)  NOT NULL PRIMARY KEY,
+      data        LONGBLOB     NOT NULL,
+      mime_type   VARCHAR(50)  NOT NULL,
+      uploaded_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  console.log('DB ready — records, app_config, game & images tables ensured');
 }
 
 // ========== API ROUTES ==========
@@ -153,9 +157,32 @@ app.delete('/api/records', async (req, res) => {
   }
 });
 
-app.post('/api/upload', upload.single('image'), (req, res) => {
+app.post('/api/upload', upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no file' });
-  res.json({ filename: req.file.filename });
+  try {
+    const id = crypto.randomUUID();
+    await query(
+      'INSERT INTO images (id, data, mime_type) VALUES (?, ?, ?)',
+      [id, req.file.buffer, req.file.mimetype]
+    );
+    res.json({ id });
+  } catch (err) {
+    console.error('POST /api/upload error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/images/:id', async (req, res) => {
+  try {
+    const rows = await query('SELECT data, mime_type FROM images WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'no image' });
+    res.set('Content-Type', rows[0].mime_type);
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(rows[0].data);
+  } catch (err) {
+    console.error('GET /api/images/:id error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 app.get('/api/game', async (req, res) => {

@@ -367,12 +367,16 @@ export function PlayPage() {
     const hasImg = pair.promptType !== "text" && Boolean(pair.promptImage);
     if (hasImg) {
       return (
-        <div className="relative flex w-full min-w-0 items-center justify-center overflow-hidden rounded-sm border-2 border-f1-line border-l-[6px] border-l-[#DC0000] bg-zinc-200 shadow-sm">
+        <div
+          className="relative inline-flex min-w-0 shrink-0 justify-self-start items-center justify-center overflow-hidden rounded-sm border-2 border-f1-line border-l-[6px] border-l-[#DC0000] bg-zinc-200 shadow-sm"
+          // ความสูงปรับตามพื้นที่หน้าจอที่เหลือจริง (หัก chrome ~470px) หารด้วยจำนวนคำถาม · ความกว้างหดตามสัดส่วนจริงของรูป ไม่ยืดเต็มคอลัมน์ (กันช่องว่างข้างรูป)
+          style={{ height: `clamp(9rem, calc((100vh - 470px) / ${total}), 16rem)` }}
+        >
           <img
             src={pair.promptImage}
             alt={pair.promptText}
             draggable={false}
-            className="h-auto w-full object-contain"
+            className="h-full w-auto object-contain"
           />
           <span className="f1-font-mono absolute left-2 top-1 rounded-sm bg-white/90 px-1.5 py-0.5 text-xs font-bold text-f1-red lg:text-sm">
             {idx + 1}
@@ -404,7 +408,8 @@ export function PlayPage() {
   }
 
   const sectionTitle = "f1-font-display text-lg font-bold tracking-wide text-f1-ink fit:text-sm";
-  const rowGrid = "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-3 lg:gap-6";
+  // คอลัมน์คำถามเป็น auto (หดตามรูปจริง) ไม่ใช่ 1fr เพื่อให้ลูกศร/คำตอบขยับมาชิดคำถามแทนที่จะลอยกลางแถว
+  const rowGrid = "grid grid-cols-[auto_auto_minmax(0,1fr)] items-stretch gap-3 lg:gap-6";
   const tier = modalData ? resultTier(modalData.score, modalData.total) : null;
   const howToList = (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
@@ -720,11 +725,11 @@ export function PlayPage() {
 
       {pickerBoxId && (
         <div
-          className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-black/70 p-4"
+          className="f1-backdrop-fade fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-black/70 p-4"
           onClick={() => setPickerBoxId(null)}
         >
           <div
-            className="f1-font-display relative my-auto w-full max-w-3xl rounded-sm border-4 border-[#DC0000] bg-white p-4 text-f1-ink"
+            className="f1-font-display f1-modal-pop relative my-auto w-full max-w-3xl rounded-sm border-4 border-[#DC0000] bg-white p-4 text-f1-ink"
             onClick={(e) => e.stopPropagation()}
           >
             <button

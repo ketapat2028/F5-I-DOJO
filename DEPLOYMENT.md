@@ -33,8 +33,9 @@
 ## Backend
 
 - Entry: `backend/index.js`
-- ตอนเริ่มจะสร้างตาราง `records`, `app_config` และ `game` เองถ้ายังไม่มี
+- ตอนเริ่มจะสร้างตาราง `records`, `app_config`, `game` และ `images` เองถ้ายังไม่มี
 - ชุดคำถามของเกมเก็บในตาราง `game` (แถวเดียว, JSON) ผ่าน `GET /api/game` (404 = ยังไม่มี) และ `PUT /api/game`
+- รูปที่อัปโหลดจากหน้า editor เก็บเป็น `LONGBLOB` ในตาราง `images` (ไม่เขียนไฟล์ลงดิสก์) — `POST /api/upload` คืน `{ id }` แล้ว question/answer เก็บ URL `/I-DOJO/api/images/<id>`, เปิดรูปผ่าน `GET /api/images/:id`
 - `/I-DOJO/editor` ไม่มีการตรวจสิทธิ์ — ใครเข้าถึง URL นี้ได้ (วง LAN) ก็แก้ชุดคำถาม/อัปโหลดรูป/ลบ records ได้ทันที (ตัดระบบ `ADMIN_SECRET` ออกแล้วตามคำขอ — ดู `CHANGELOG.md`)
 - Config อยู่ใน `backend/.env` (ไม่ commit, permission `600`, owner `idojo`)
 - ต้องมี `backend/.env.example` ที่ระบุ key ทุกตัวโดยไม่มีค่าจริง
@@ -50,7 +51,7 @@ DB_NAME=pit5_station
 ```
 
 - ไม่มี `DB_PORT` — โค้ดไม่ได้อ่าน ใช้ default ของ mariadb (3306)
-- ไฟล์ที่อัปโหลดเก็บใน `backend/uploads/` (relative กับ working dir ของ PM2 จึงต้อง `pm2 start` จากใน `backend/`) เปิดได้ที่ `/I-DOJO/api/uploads/<file>`
+- `backend/uploads/` เหลือไว้เสิร์ฟแบบ static เผื่อชุดคำถามเก่าที่ยังอ้างอิงไฟล์อยู่ (`/I-DOJO/api/uploads/<file>`) แต่รูปที่อัปโหลดใหม่ทั้งหมดเก็บในตาราง `images` แล้ว ไม่ได้เขียนไฟล์เพิ่มอีก
 - Express ยังเสิร์ฟ `backend/build` ที่ `/I-DOJO` ด้วย (ไว้ทดสอบตรง port 5000 โดยไม่มี Apache) และตัด `/I-DOJO` ออกจาก `/I-DOJO/api/...` เองแบบเดียวกับ Apache — บน Pi ส่วนนี้ Apache เสิร์ฟเอง
 - เกมถูกฝังเป็น iframe บนจอ Station ของ portal — **ห้ามเพิ่ม `X-Frame-Options` หรือ CSP `frame-ancestors`** ใน Apache (ดู `PORTAL_INTEGRATION.md`)
 

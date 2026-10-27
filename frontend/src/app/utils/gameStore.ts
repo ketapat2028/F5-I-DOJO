@@ -247,7 +247,7 @@ export async function saveGame(game: Theme): Promise<Theme> {
   return { ...game, updatedAt: Date.now() };
 }
 
-// คืน URL ของรูปบน server (/I-DOJO/api/uploads/<file>) ไว้เก็บแทน base64
+// รูปเก็บเป็นแถวในตาราง images บน server (ไม่ใช่ไฟล์) คืน URL (/I-DOJO/api/images/<id>) ไว้เก็บแทน base64
 export async function uploadImage(file: Blob): Promise<string> {
   const form = new FormData();
   const name = file instanceof File ? file.name : "image.jpg";
@@ -257,8 +257,8 @@ export async function uploadImage(file: Blob): Promise<string> {
     body: form,
   });
   if (!res.ok) throw await failure(res, "อัปโหลดรูป");
-  const { filename } = await res.json();
-  return `${API}/uploads/${filename}`;
+  const { id } = await res.json();
+  return `${API}/images/${id}`;
 }
 
 // ชุดตัวอย่าง F1 ให้ editor ใช้เป็นจุดเริ่มเมื่อ server ยังไม่มีข้อมูล
