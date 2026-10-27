@@ -201,6 +201,12 @@ export class NoGameError extends Error {
   }
 }
 
+export class UnauthorizedError extends Error {
+  constructor() {
+    super("รหัสผู้ดูแลไม่ถูกต้อง");
+  }
+}
+
 function toPayload(game: Theme) {
   return { name: game.name, timeLimitSeconds: game.timeLimitSeconds, pairs: game.pairs.map(toSpecRecord) };
 }
@@ -218,6 +224,7 @@ function fromPayload(data: unknown): Theme {
 }
 
 async function failure(res: Response, what: string): Promise<Error> {
+  if (res.status === 401) return new UnauthorizedError();
   let detail = "";
   try {
     const body = await res.json();
@@ -237,10 +244,10 @@ export async function getGame(): Promise<Theme> {
   return game;
 }
 
-export async function saveGame(game: Theme): Promise<Theme> {
+export async function saveGame(game: Theme, adminSecret: string): Promise<Theme> {
   const res = await fetch(`${API}/game`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-admin-secret": adminSecret },
     body: JSON.stringify(toPayload(game)),
   });
   if (!res.ok) throw await failure(res, "บันทึก");
@@ -248,12 +255,20 @@ export async function saveGame(game: Theme): Promise<Theme> {
 }
 
 // รูปเก็บเป็นแถวในตาราง images บน server (ไม่ใช่ไฟล์) คืน URL (/I-DOJO/api/images/<id>) ไว้เก็บแทน base64
-export async function uploadImage(file: Blob): Promise<string> {
+export async function verifyAdmin(adminSecret: string): Promise<boolean> {
+  const res = await fetch(`${API}/admin/check`, { headers: { "x-admin-secret": adminSecret } });
+  if (res.status === 401) return false;
+  if (!res.ok) throw await failure(res, "ตรวจรหัส");
+  return true;
+}
+
+export async function uploadImage(file: Blob, adminSecret: string): Promise<string> {
   const form = new FormData();
   const name = file instanceof File ? file.name : "image.jpg";
   form.append("image", file, name);
   const res = await fetch(`${API}/upload`, {
     method: "POST",
+    headers: { "x-admin-secret": adminSecret },
     body: form,
   });
   if (!res.ok) throw await failure(res, "อัปโหลดรูป");

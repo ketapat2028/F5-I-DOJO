@@ -24,22 +24,44 @@ app.use(cors());
 // ชุดคำถามเก่า/ที่ import มาอาจยังมีรูปเป็น base64 ฝังอยู่ จึงเผื่อขนาดไว้
 app.use(express.json({ limit: '10mb' }));
 // รูปที่อัปโหลดใหม่เก็บใน DB (ตาราง images) แล้ว — เหลือเสิร์ฟโฟลเดอร์นี้ไว้เผื่อชุดคำถามเก่าที่ยังอ้างอิงไฟล์อยู่
-app.use('/api/uploads', express.static('uploads'));
+// อ้างจากที่อยู่ของไฟล์นี้ ไม่ขึ้นกับว่า PM2 start จากโฟลเดอร์ไหน
+app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// งานที่แก้ข้อมูล (บันทึกชุดคำถาม, อัปโหลดรูป, เขียน/ลบ records, app-config) ต้องส่ง header x-admin-secret ตรงกับ ADMIN_SECRET
+function requireAdmin(req, res, next) {
+  const secret = req.headers['x-admin-secret'];
+  if (!process.env.ADMIN_SECRET || !secret || secret !== process.env.ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
 
 // ========== Multer config ==========
 // เก็บไฟล์ไว้ใน memory แล้วค่อยเขียนลง DB (ตาราง images) ไม่เขียนลงดิสก์แล้ว
+// content-type ที่เสิร์ฟกลับกำหนดจากนามสกุลเอง ไม่เชื่อ mimetype ที่ browser ส่งมา (กันเก็บ text/html แล้วเสิร์ฟจาก origin เรา)
+const IMAGE_TYPES = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
+const IMAGE_MAX_MB = 10;
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: IMAGE_MAX_MB * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext)) {
+    if (IMAGE_TYPES[ext]) {
       cb(null, true);
     } else {
       cb(new Error('รองรับเฉพาะไฟล์รูปภาพ .jpg .jpeg .png .gif .webp เท่านั้น'));
     }
   }
 });
+
+// error ของ multer (ไฟล์ผิดชนิด/ใหญ่เกิน) ตอบเป็น JSON 400 ให้หน้า editor แสดงข้อความได้
+function uploadImageField(req, res, next) {
+  upload.single('image')(req, res, (err) => {
+    if (!err) return next();
+    const message = err.code === 'LIMIT_FILE_SIZE' ? `ไฟล์ใหญ่เกิน ${IMAGE_MAX_MB}MB` : err.message;
+    res.status(400).json({ error: message });
+  });
+}
 
 // ========== STATIC FILE SERVING + SPA FALLBACK ==========
 // ใช้ตอนรันโดยไม่มี Apache (เปิดตรง port 5000) — บน Pi ส่วนนี้ Apache เสิร์ฟจาก backend/build เอง
@@ -128,7 +150,7 @@ app.get('/api/records', async (req, res) => {
   }
 });
 
-app.post('/api/records', async (req, res) => {
+app.post('/api/records', requireAdmin, async (req, res) => {
   const { title, detail } = req.body;
   if (!title) {
     return res.status(400).json({ error: 'title is required' });
@@ -147,7 +169,7 @@ app.post('/api/records', async (req, res) => {
   }
 });
 
-app.delete('/api/records', async (req, res) => {
+app.delete('/api/records', requireAdmin, async (req, res) => {
   try {
     await query('DELETE FROM records');
     res.json({ ok: true });
@@ -157,13 +179,13 @@ app.delete('/api/records', async (req, res) => {
   }
 });
 
-app.post('/api/upload', upload.single('image'), async (req, res) => {
+app.post('/api/upload', requireAdmin, uploadImageField, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no file' });
   try {
     const id = crypto.randomUUID();
     await query(
       'INSERT INTO images (id, data, mime_type) VALUES (?, ?, ?)',
-      [id, req.file.buffer, req.file.mimetype]
+      [id, req.file.buffer, IMAGE_TYPES[path.extname(req.file.originalname).toLowerCase()]]
     );
     res.json({ id });
   } catch (err) {
@@ -172,6 +194,12 @@ app.post('/api/upload', upload.single('image'), async (req, res) => {
   }
 });
 
+// ให้หน้า editor ตรวจรหัสผู้ดูแลก่อนเริ่มแก้
+app.get('/api/admin/check', requireAdmin, (req, res) => {
+  res.json({ ok: true });
+});
+
+// อ่านได้โดยไม่ต้องใช้รหัส — หน้าเกมบนจอ Station ต้องโหลดรูปเอง
 app.get('/api/images/:id', async (req, res) => {
   try {
     const rows = await query('SELECT data, mime_type FROM images WHERE id = ?', [req.params.id]);
@@ -196,7 +224,7 @@ app.get('/api/game', async (req, res) => {
   }
 });
 
-app.put('/api/game', async (req, res) => {
+app.put('/api/game', requireAdmin, async (req, res) => {
   const { name, timeLimitSeconds, pairs } = req.body || {};
   if (!Array.isArray(pairs) || pairs.length < 2) {
     return res.status(400).json({ error: 'ต้องมีอย่างน้อย 2 คู่' });
@@ -230,7 +258,7 @@ app.get('/api/app-config', async (req, res) => {
   }
 });
 
-app.post('/api/app-config', async (req, res) => {
+app.post('/api/app-config', requireAdmin, async (req, res) => {
   try {
     const json = JSON.stringify(req.body);
     await query(

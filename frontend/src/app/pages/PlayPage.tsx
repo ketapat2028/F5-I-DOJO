@@ -30,6 +30,13 @@ type PortalReport = { result: PortalResult; score: number };
 
 // portal ไม่ตอบ ack ภายในเวลานี้ = ถือว่ายังไม่ได้บันทึก (PORTAL_INTEGRATION.md ข้อ 2)
 const ACK_TIMEOUT_MS = 10_000;
+// บนจอ Station ต้องมีเวลาจำกัดเสมอ ไม่งั้นตอบไม่ครบจะไม่มีผล fail ส่งไปที่จอ
+const EMBED_DEFAULT_LIMIT = 300;
+
+// เวลาที่ใช้จริง: ตอนถูกฝังแต่ตั้งไว้ 0 (ไม่จำกัด) ใช้ 5 นาทีแทน
+function effectiveLimit(game: Theme, embedded: boolean): number {
+  return embedded && game.timeLimitSeconds <= 0 ? EMBED_DEFAULT_LIMIT : game.timeLimitSeconds;
+}
 
 const TYPE_BADGE: Record<PromptType, string> = { text: "TEXT", image: "IMAGE", mixed: "MIXED" };
 
@@ -106,6 +113,8 @@ export function PlayPage() {
   const pendingRef = useRef<PortalReport | null>(null);
   const lastReportRef = useRef<PortalReport | null>(null);
   const ackTimerRef = useRef<number | null>(null);
+  const portalStatusRef = useRef<PortalStatus>("idle");
+  portalStatusRef.current = portalStatus;
 
   useEffect(() => {
     setLoadError(null);
@@ -113,6 +122,8 @@ export function PlayPage() {
       .then((g) => {
         setGame(g);
         setChips(makeChips(g.pairs));
+        // บนจอ Station เริ่มนับเวลาทันที ไม่รอผู้เล่นแตะ
+        if (embedded) setPhase("running");
       })
       .catch((e) => {
         setLoadError(
@@ -125,7 +136,9 @@ export function PlayPage() {
 
   useEffect(() => {
     function handleAck(ack: PortalAck) {
-      if (!pendingRef.current) return;
+      // ack ที่มาช้ากว่า ACK_TIMEOUT_MS ของผลเดียวกัน ยังนับ (จอบันทึกแล้ว ไม่ต้องกดส่งใหม่)
+      const late = !pendingRef.current && portalStatusRef.current === "error" && ack.result === lastReportRef.current?.result;
+      if (!pendingRef.current && !late) return;
       if (ackTimerRef.current) window.clearTimeout(ackTimerRef.current);
       pendingRef.current = null;
       setPortalStatus(ack.ok ? "sent" : "error");
@@ -148,7 +161,8 @@ export function PlayPage() {
 
   useEffect(() => {
     if (phase !== "running" || !game) return;
-    if (game.timeLimitSeconds > 0 && elapsed >= game.timeLimitSeconds) {
+    const limit = effectiveLimit(game, embedded);
+    if (limit > 0 && elapsed >= limit) {
       handleCheck(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -178,10 +192,13 @@ export function PlayPage() {
   const totalPlaced = Object.values(slots).reduce((sum, arr) => sum + arr.length, 0);
   const hasAnyPlaced = totalPlaced > 0;
   const pool = chips.filter((c) => !Object.values(slots).some((arr) => arr.includes(c.id)));
-  const hasLimit = game.timeLimitSeconds > 0;
-  const remaining = hasLimit ? Math.max(0, game.timeLimitSeconds - elapsed) : null;
+  const limit = effectiveLimit(game, embedded);
+  const hasLimit = limit > 0;
+  const remaining = hasLimit ? Math.max(0, limit - elapsed) : null;
   const lowTime = remaining !== null && remaining <= 60;
   const locked = phase === "finished" || phase === "timeout";
+  // ตอนถูกฝัง: ส่งผลไปแล้ว (กำลังรอ/ได้ ack) → ไม่ให้เล่นต่อเอง รอจอจัดการ
+  const resultHandedOff = embedded && (portalStatus === "sending" || portalStatus === "sent");
 
   function startIfIdle() {
     setPhase((p) => (p === "idle" ? "running" : p));
@@ -480,7 +497,7 @@ export function PlayPage() {
                     "h-full rounded-full bg-[#DC0000] transition-all",
                     lowTime && phase === "running" && "f1-timer-blink",
                   )}
-                  style={{ width: `${(remaining / game.timeLimitSeconds) * 100}%` }}
+                  style={{ width: `${(remaining / limit) * 100}%` }}
                 />
               </div>
             )}
@@ -684,13 +701,16 @@ export function PlayPage() {
               ล้างคำตอบ
             </Button>
           )}
-          <Button
-            variant="outline"
-            className="f1-font-display border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
-            onClick={resetAll}
-          >
-            รีเซ็ตทั้งหมด
-          </Button>
+          {/* บนจอ Station รีเซ็ตแล้วเวลาเริ่มใหม่ = เลี่ยงการหมดเวลา จึงไม่ให้กด */}
+          {!embedded && (
+            <Button
+              variant="outline"
+              className="f1-font-display border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
+              onClick={resetAll}
+            >
+              รีเซ็ตทั้งหมด
+            </Button>
+          )}
         </div>
         </div>
 
@@ -803,9 +823,9 @@ export function PlayPage() {
               <div
                 className={cn(
                   "mt-3 flex flex-wrap items-center justify-center gap-2 rounded-sm px-3 py-2 text-center text-sm",
-                  portalStatus === "sending" && "bg-black/60 text-[#FFD60A]",
-                  portalStatus === "sent" && "bg-green-950/60 text-green-300",
-                  portalStatus === "error" && "bg-red-950/60 text-red-300",
+                  portalStatus === "sending" && "bg-zinc-100 text-f1-ink",
+                  portalStatus === "sent" && "bg-f1-ok-bg text-f1-ok-ink",
+                  portalStatus === "error" && "bg-f1-bad-bg text-f1-bad",
                 )}
               >
                 {portalStatus === "sending" && "📡 กำลังส่งผลไปที่จอ…"}
@@ -904,15 +924,26 @@ export function PlayPage() {
               </Button>
             )}
 
+            {/* บนจอ Station ส่งผลแล้วจอเป็นคนไปต่อ: ผ่าน → สถานีถัดไป, ไม่ผ่าน → โหลดเกมใหม่ (docs/STATION_ACTIVITY.md ของ portal) */}
+            {resultHandedOff && (
+              <p className="mt-4 text-center text-sm font-medium text-f1-mute">
+                {lastReportRef.current?.result === "pass"
+                  ? "ผ่านแล้ว — จอจะไปสถานีถัดไปเอง"
+                  : "จอจะโหลดเกมใหม่ให้ลองอีกครั้ง"}
+              </p>
+            )}
+
             <div className="mt-5 flex justify-center gap-2">
-              <Button
-                variant="outline"
-                className="border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
-                onClick={resetAll}
-              >
-                เล่นใหม่
-              </Button>
-              {!modalData.allCorrect && !modalData.isTimeout && (
+              {!embedded && (
+                <Button
+                  variant="outline"
+                  className="border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
+                  onClick={resetAll}
+                >
+                  เล่นใหม่
+                </Button>
+              )}
+              {!modalData.allCorrect && !modalData.isTimeout && !resultHandedOff && (
                 <Button className="bg-[#DC0000] text-white hover:bg-[#b00000]" onClick={retryWrongOnly}>
                   ลองใหม่เฉพาะข้อผิด
                 </Button>

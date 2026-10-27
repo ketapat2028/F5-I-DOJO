@@ -25,7 +25,10 @@ export async function addRecord(
   return res.json();
 }
 
-export async function clearRecords(): Promise<void> {
-  const res = await fetch(API, { method: 'DELETE' });
+export async function clearRecords(adminSecret: string): Promise<void> {
+  const res = await fetch(API, {
+    method: 'DELETE',
+    headers: { 'x-admin-secret': adminSecret },
+  });
   if (!res.ok) throw new Error(`DELETE records failed: ${res.status}`);
 }
