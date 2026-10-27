@@ -152,10 +152,10 @@ export function EditPage() {
         const legacy = readLegacyLocalGame();
         if (legacy) {
           setGame(legacy);
-          setNotice("server ยังไม่มีชุดคำถาม — นำข้อมูลเดิมจากเครื่องนี้มาให้ กดบันทึกเพื่อขึ้น server");
+          setNotice("server ยังไม่มีชุดคำถาม — นำข้อมูลเดิมจากเครื่องนี้มาให้ กดอัปโหลดเพื่อขึ้น server");
         } else {
           setGame(makeDemoGame());
-          setNotice("server ยังไม่มีชุดคำถาม — เริ่มจากชุดตัวอย่าง F1 แก้แล้วกดบันทึก");
+          setNotice("server ยังไม่มีชุดคำถาม — เริ่มจากชุดตัวอย่าง F1 แก้แล้วกดอัปโหลด");
         }
       });
   }, [game]);
@@ -261,7 +261,7 @@ export function EditPage() {
       await saveGame(game);
       navigate("/");
     } catch (e) {
-      setStatus(errorText(e, "บันทึกไม่สำเร็จ"));
+      setStatus(errorText(e, "อัปโหลดไม่สำเร็จ"));
     } finally {
       setSaving(false);
     }
@@ -442,7 +442,7 @@ export function EditPage() {
             className="f1-font-display bg-[#DC0000] text-white hover:bg-[#b00000]"
             onClick={handleSave}
           >
-            บันทึกแล้วกลับไปเล่น
+            อัปโหลดแล้วไปเล่น
           </Button>
         </div>
       </main>
