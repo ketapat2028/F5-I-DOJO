@@ -1,4 +1,4 @@
-import type { MatchPair, PromptType, Theme } from "../types/theme";
+import type { AnswerOption, MatchPair, PromptType, Theme } from "../types/theme";
 
 // key เดิมตอนยังเก็บใน localStorage — เหลือไว้อ่านเพื่อย้ายข้อมูลขึ้น server เท่านั้น (readLegacyLocalGame)
 export const PAIRS_KEY = "f1-dojo-pairs-v4-click-match";
@@ -7,17 +7,22 @@ const DEFAULT_NAME = "DOJO · F1 RACING RED";
 const DEFAULT_TIME = 300;
 
 // crypto.randomUUID ใช้ได้เฉพาะ secure context — เปิดผ่าน http://<IP ของ Pi> จะไม่มี
-function genId(): string {
+export function genId(): string {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
+export function makeEmptyAnswer(): AnswerOption {
+  return { id: genId(), type: "text", text: "" };
+}
+
 export function makeEmptyPair(): MatchPair {
-  return { id: genId(), promptType: "text", promptText: "", answerType: "text", answerText: "" };
+  return { id: genId(), promptType: "text", promptText: "", answers: [makeEmptyAnswer()] };
 }
 
 // ===== รูปแบบข้อมูลสำหรับ Import/Export (ตามโครงสร้าง EDIT MODE) =====
 interface SpecSide {
+  id?: string;
   type?: string;
   text?: string;
   imageUrl?: string;
@@ -26,10 +31,9 @@ interface SpecSide {
 export interface SpecRecord {
   id?: string;
   question?: SpecSide;
+  // answer = รูปแบบเก่า (คำตอบเดียว) เหลือไว้อ่านข้อมูลเดิม ไม่เขียนออกแล้ว — ดู fromAnyRecord
   answer?: SpecSide;
-  videoUrl?: string;
-  videoTitle?: string;
-  videoDesc?: string;
+  answers?: SpecSide[];
 }
 
 function svg(markup: string, width = 320): string {
@@ -90,8 +94,7 @@ function seedPairs(): MatchPair[] {
     id: `p${i + 1}`,
     promptType: "text",
     promptText: q,
-    answerType: "text",
-    answerText: a,
+    answers: [{ id: genId(), type: "text", text: a }],
   }));
   pairs.push(
     {
@@ -99,18 +102,14 @@ function seedPairs(): MatchPair[] {
       promptType: "image",
       promptText: "Ferrari SF-23",
       promptImage: IMG_FERRARI_CAR,
-      answerType: "image",
-      answerText: "Ferrari",
-      answerImage: IMG_FERRARI_LOGO,
+      answers: [{ id: genId(), type: "image", text: "Ferrari", image: IMG_FERRARI_LOGO }],
     },
     {
       id: "p8",
       promptType: "mixed",
       promptText: "ทีมแชมป์โลก 2023 คือ?",
       promptImage: IMG_TROPHY,
-      answerType: "image",
-      answerText: "Red Bull Racing",
-      answerImage: IMG_REDBULL,
+      answers: [{ id: genId(), type: "image", text: "Red Bull Racing", image: IMG_REDBULL }],
     },
   );
   return pairs;
@@ -120,10 +119,7 @@ export function toSpecRecord(pair: MatchPair): SpecRecord {
   return {
     id: pair.id,
     question: { type: pair.promptType, text: pair.promptText, imageUrl: pair.promptImage ?? "" },
-    answer: { type: pair.answerType, text: pair.answerText, imageUrl: pair.answerImage ?? "" },
-    videoUrl: pair.videoUrl ?? "",
-    videoTitle: pair.videoTitle ?? "",
-    videoDesc: pair.videoDesc ?? "",
+    answers: pair.answers.map((a) => ({ id: a.id, type: a.type, text: a.text, imageUrl: a.image ?? "" })),
   };
 }
 
@@ -139,21 +135,43 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-// รองรับทั้งรูปแบบใหม่ (question/answer เป็น object) และรูปแบบเก่า (topic/answer เป็นข้อความ)
+function toAnswerOption(raw: unknown): AnswerOption {
+  const r = isObject(raw) ? raw : {};
+  return {
+    id: typeof r.id === "string" ? r.id : genId(),
+    type: normalizeType(r.type),
+    text: String(r.text ?? ""),
+    image: optString(r.imageUrl),
+  };
+}
+
+// รองรับ 3 รูปแบบ: (1) answers[] ใหม่ (2) answer object เดี่ยวรูปแบบก่อนหน้า (3) answer เป็นข้อความล้วนแบบเก่าสุด
+function extractAnswers(record: Record<string, unknown>): AnswerOption[] {
+  if (Array.isArray(record.answers) && record.answers.length > 0) {
+    return record.answers.map(toAnswerOption);
+  }
+  if (isObject(record.answer)) {
+    return [toAnswerOption(record.answer)];
+  }
+  return [
+    {
+      id: genId(),
+      type: normalizeType(record.answerType),
+      text: String((typeof record.answer === "string" ? record.answer : record.answerText) ?? ""),
+      image: optString(record.answerImage),
+    },
+  ];
+}
+
+// รองรับทั้งรูปแบบใหม่ (question เป็น object) และรูปแบบเก่า (topic เป็นข้อความ)
 function fromAnyRecord(record: Record<string, unknown>): MatchPair {
   const q = isObject(record.question) ? record.question : undefined;
-  const a = isObject(record.answer) ? record.answer : undefined;
   return {
     id: typeof record.id === "string" || typeof record.id === "number" ? String(record.id) : genId(),
     promptType: normalizeType(q ? q.type : (record.type ?? record.promptType)),
     promptText: String((q ? q.text : (record.topic ?? record.promptText)) ?? ""),
     promptImage: optString(q ? q.imageUrl : (record.imageUrl ?? record.promptImage)),
-    answerType: normalizeType(a ? a.type : record.answerType),
-    answerText: String((a ? a.text : (typeof record.answer === "string" ? record.answer : record.answerText)) ?? ""),
-    answerImage: optString(a ? a.imageUrl : record.answerImage),
-    videoUrl: optString(record.videoUrl),
-    videoTitle: optString(record.videoTitle),
-    videoDesc: optString(record.videoDesc),
+    answers: extractAnswers(record),
   };
 }
 
@@ -236,6 +254,7 @@ export async function saveGame(game: Theme, adminSecret: string): Promise<Theme>
   return { ...game, updatedAt: Date.now() };
 }
 
+// รูปเก็บเป็นแถวในตาราง images บน server (ไม่ใช่ไฟล์) คืน URL (/I-DOJO/api/images/<id>) ไว้เก็บแทน base64
 export async function verifyAdmin(adminSecret: string): Promise<boolean> {
   const res = await fetch(`${API}/admin/check`, { headers: { "x-admin-secret": adminSecret } });
   if (res.status === 401) return false;
@@ -243,28 +262,18 @@ export async function verifyAdmin(adminSecret: string): Promise<boolean> {
   return true;
 }
 
-// อัปโหลดไฟล์แล้วคืน URL บน server (/I-DOJO/api/uploads/<file>)
-async function uploadFile(endpoint: string, field: string, file: Blob, fallbackName: string, adminSecret: string, what: string) {
+export async function uploadImage(file: Blob, adminSecret: string): Promise<string> {
   const form = new FormData();
-  form.append(field, file, file instanceof File ? file.name : fallbackName);
-  const res = await fetch(`${API}/${endpoint}`, {
+  const name = file instanceof File ? file.name : "image.jpg";
+  form.append("image", file, name);
+  const res = await fetch(`${API}/upload`, {
     method: "POST",
     headers: { "x-admin-secret": adminSecret },
     body: form,
   });
-  if (!res.ok) throw await failure(res, what);
-  const { filename } = await res.json();
-  return `${API}/uploads/${filename}`;
-}
-
-// รูปเก็บเป็น URL แทน base64
-export function uploadImage(file: Blob, adminSecret: string): Promise<string> {
-  return uploadFile("upload", "image", file, "image.jpg", adminSecret, "อัปโหลดรูป");
-}
-
-// วิดีโอสอน .mp4/.webm เก็บบน Pi (ไม่ใช้ YouTube เพราะจอ Station ไม่มีเน็ตออก)
-export function uploadVideo(file: File, adminSecret: string): Promise<string> {
-  return uploadFile("upload-video", "video", file, "video.mp4", adminSecret, "อัปโหลดวิดีโอ");
+  if (!res.ok) throw await failure(res, "อัปโหลดรูป");
+  const { id } = await res.json();
+  return `${API}/images/${id}`;
 }
 
 // ชุดตัวอย่าง F1 ให้ editor ใช้เป็นจุดเริ่มเมื่อ server ยังไม่มีข้อมูล
@@ -297,7 +306,11 @@ function sideComplete(type: PromptType, text: string, image?: string): boolean {
 }
 
 export function isPairComplete(p: MatchPair): boolean {
-  return sideComplete(p.promptType, p.promptText, p.promptImage) && sideComplete(p.answerType, p.answerText, p.answerImage);
+  return (
+    sideComplete(p.promptType, p.promptText, p.promptImage) &&
+    p.answers.length > 0 &&
+    p.answers.every((a) => sideComplete(a.type, a.text, a.image))
+  );
 }
 
 export function parseImportedPairs(raw: string): MatchPair[] {

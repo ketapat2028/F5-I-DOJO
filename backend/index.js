@@ -5,6 +5,7 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 
@@ -22,12 +23,11 @@ app.use((req, res, next) => {
 app.use(cors());
 // ชุดคำถามเก่า/ที่ import มาอาจยังมีรูปเป็น base64 ฝังอยู่ จึงเผื่อขนาดไว้
 app.use(express.json({ limit: '10mb' }));
-// อยู่ใต้ /api/ เพื่อให้ Apache บน Pi proxy มาถึง (/I-DOJO/api/uploads/<file>)
+// รูปที่อัปโหลดใหม่เก็บใน DB (ตาราง images) แล้ว — เหลือเสิร์ฟโฟลเดอร์นี้ไว้เผื่อชุดคำถามเก่าที่ยังอ้างอิงไฟล์อยู่
 // อ้างจากที่อยู่ของไฟล์นี้ ไม่ขึ้นกับว่า PM2 start จากโฟลเดอร์ไหน
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
-app.use('/api/uploads', express.static(UPLOAD_DIR));
+app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// งานที่แก้ข้อมูล (บันทึกชุดคำถาม, อัปโหลดรูป, ลบ records) ต้องส่ง header x-admin-secret ตรงกับ ADMIN_SECRET
+// งานที่แก้ข้อมูล (บันทึกชุดคำถาม, อัปโหลดรูป, เขียน/ลบ records, app-config) ต้องส่ง header x-admin-secret ตรงกับ ADMIN_SECRET
 function requireAdmin(req, res, next) {
   const secret = req.headers['x-admin-secret'];
   if (!process.env.ADMIN_SECRET || !secret || secret !== process.env.ADMIN_SECRET) {
@@ -37,58 +37,30 @@ function requireAdmin(req, res, next) {
 }
 
 // ========== Multer config ==========
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname).toLowerCase())
-});
-
-function makeUploader(exts, maxMb, kind) {
-  return multer({
-    storage,
-    limits: { fileSize: maxMb * 1024 * 1024 },
-    fileFilter: (req, file, cb) => {
-      const ext = path.extname(file.originalname).toLowerCase();
-      if (exts.includes(ext)) {
-        cb(null, true);
-      } else {
-        cb(new Error(`รองรับเฉพาะไฟล์${kind} ${exts.join(' ')} เท่านั้น`));
-      }
-    }
-  });
-}
-
-const imageUpload = makeUploader(['.jpg', '.jpeg', '.png', '.gif', '.webp'], 10, 'รูปภาพ');
-// วิดีโอสอนเก็บบน Pi เอง (จอ Station ไม่มีเน็ตออก YouTube)
-const VIDEO_MAX_MB = 200;
-const videoUpload = makeUploader(['.mp4', '.webm'], VIDEO_MAX_MB, 'วิดีโอ');
-
-// error ของ multer (ไฟล์ผิดชนิด/ใหญ่เกิน) ตอบเป็น JSON 400 ให้หน้า editor แสดงข้อความได้
-function single(uploader, field) {
-  return (req, res, next) => {
-    uploader.single(field)(req, res, (err) => {
-      if (!err) return next();
-      const maxMb = uploader === videoUpload ? VIDEO_MAX_MB : 10;
-      const message = err.code === 'LIMIT_FILE_SIZE' ? `ไฟล์ใหญ่เกิน ${maxMb}MB` : err.message;
-      res.status(400).json({ error: message });
-    });
-  };
-}
-
-// ลบไฟล์ใน uploads ที่ชุดคำถามไม่ได้ใช้แล้ว — เว้นไฟล์ที่เพิ่งอัปโหลดไม่ถึง 1 ชม. (อาจยังแก้ค้างอยู่ใน editor อีก tab)
-const ORPHAN_GRACE_MS = 60 * 60 * 1000;
-async function removeOrphanUploads(savedJson) {
-  const names = await fs.promises.readdir(UPLOAD_DIR);
-  for (const name of names) {
-    if (name.startsWith('.') || savedJson.includes(`/uploads/${name}`)) continue;
-    const file = path.join(UPLOAD_DIR, name);
-    const stat = await fs.promises.stat(file);
-    if (stat.isFile() && Date.now() - stat.mtimeMs > ORPHAN_GRACE_MS) {
-      await fs.promises.unlink(file);
-      console.log('removed unused upload:', name);
+// เก็บไฟล์ไว้ใน memory แล้วค่อยเขียนลง DB (ตาราง images) ไม่เขียนลงดิสก์แล้ว
+// content-type ที่เสิร์ฟกลับกำหนดจากนามสกุลเอง ไม่เชื่อ mimetype ที่ browser ส่งมา (กันเก็บ text/html แล้วเสิร์ฟจาก origin เรา)
+const IMAGE_TYPES = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
+const IMAGE_MAX_MB = 10;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: IMAGE_MAX_MB * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (IMAGE_TYPES[ext]) {
+      cb(null, true);
+    } else {
+      cb(new Error('รองรับเฉพาะไฟล์รูปภาพ .jpg .jpeg .png .gif .webp เท่านั้น'));
     }
   }
+});
+
+// error ของ multer (ไฟล์ผิดชนิด/ใหญ่เกิน) ตอบเป็น JSON 400 ให้หน้า editor แสดงข้อความได้
+function uploadImageField(req, res, next) {
+  upload.single('image')(req, res, (err) => {
+    if (!err) return next();
+    const message = err.code === 'LIMIT_FILE_SIZE' ? `ไฟล์ใหญ่เกิน ${IMAGE_MAX_MB}MB` : err.message;
+    res.status(400).json({ error: message });
+  });
 }
 
 // ========== STATIC FILE SERVING + SPA FALLBACK ==========
@@ -155,7 +127,16 @@ async function initDB() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )
   `);
-  console.log('DB ready — records, app_config & game tables ensured');
+  // รูปที่อัปโหลดจากหน้า editor — เก็บตัวไฟล์จริงในนี้ (ไม่เขียนลงดิสก์) question/answer อ้างอิงกลับมาด้วย /api/images/<id>
+  await query(`
+    CREATE TABLE IF NOT EXISTS images (
+      id          VARCHAR(36)  NOT NULL PRIMARY KEY,
+      data        LONGBLOB     NOT NULL,
+      mime_type   VARCHAR(50)  NOT NULL,
+      uploaded_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  console.log('DB ready — records, app_config, game & images tables ensured');
 }
 
 // ========== API ROUTES ==========
@@ -198,19 +179,38 @@ app.delete('/api/records', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/upload', requireAdmin, single(imageUpload, 'image'), (req, res) => {
+app.post('/api/upload', requireAdmin, uploadImageField, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no file' });
-  res.json({ filename: req.file.filename });
-});
-
-app.post('/api/upload-video', requireAdmin, single(videoUpload, 'video'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'no file' });
-  res.json({ filename: req.file.filename });
+  try {
+    const id = crypto.randomUUID();
+    await query(
+      'INSERT INTO images (id, data, mime_type) VALUES (?, ?, ?)',
+      [id, req.file.buffer, IMAGE_TYPES[path.extname(req.file.originalname).toLowerCase()]]
+    );
+    res.json({ id });
+  } catch (err) {
+    console.error('POST /api/upload error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // ให้หน้า editor ตรวจรหัสผู้ดูแลก่อนเริ่มแก้
 app.get('/api/admin/check', requireAdmin, (req, res) => {
   res.json({ ok: true });
+});
+
+// อ่านได้โดยไม่ต้องใช้รหัส — หน้าเกมบนจอ Station ต้องโหลดรูปเอง
+app.get('/api/images/:id', async (req, res) => {
+  try {
+    const rows = await query('SELECT data, mime_type FROM images WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'no image' });
+    res.set('Content-Type', rows[0].mime_type);
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(rows[0].data);
+  } catch (err) {
+    console.error('GET /api/images/:id error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 app.get('/api/game', async (req, res) => {
@@ -241,7 +241,6 @@ app.put('/api/game', requireAdmin, async (req, res) => {
       [json]
     );
     res.json({ ok: true });
-    removeOrphanUploads(json).catch((err) => console.error('removeOrphanUploads error:', err));
   } catch (err) {
     console.error('PUT /api/game error:', err);
     res.status(500).json({ error: 'Internal server error' });
