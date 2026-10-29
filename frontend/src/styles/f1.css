@@ -201,3 +201,83 @@
     animation: none;
   }
 }
+
+/* ไฟ + รถ พุ่งออกจากจุดที่คลิก/วาง (BurstFx ใน PlayPage) */
+@keyframes f1-burst {
+  0% { transform: translate(-50%, -50%) scale(0.4); opacity: 1; }
+  70% { opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rot)) scale(1.15); opacity: 0; }
+}
+.f1-burst-piece {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-size: 22px;
+  line-height: 1;
+  animation: f1-burst 0.75s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
+}
+@keyframes f1-burst-ring {
+  from { width: 24px; height: 24px; opacity: 0.9; }
+  to { width: 90px; height: 90px; opacity: 0; }
+}
+.f1-burst-ring {
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  animation: f1-burst-ring 0.5s ease-out forwards;
+}
+
+/* รถวิ่งผ่านช่องเมื่อวางถูก */
+@keyframes f1-car-zoom {
+  0% { left: -2rem; opacity: 0; transform: translateY(-50%) scaleX(-1); }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { left: 100%; opacity: 0; transform: translateY(-50%) scaleX(-1); }
+}
+.f1-car-zoom {
+  animation: f1-car-zoom 0.7s ease-in forwards;
+}
+
+@keyframes f1-pop-in {
+  0% { transform: scale(0.6); opacity: 0; }
+  70% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.f1-pop-in {
+  animation: f1-pop-in 0.25s ease-out;
+}
+
+/* นาฬิกาเหลือ ≤ 10 วิ: กรอบเต้นเป็นจังหวะสีแดง */
+@keyframes f1-clock-pulse {
+  0%, 100% { box-shadow: 0 0 10px 2px rgba(220, 0, 0, 0.5); transform: scale(1); }
+  50% { box-shadow: 0 0 28px 8px rgba(220, 0, 0, 0.85); transform: scale(1.04); }
+}
+.f1-clock-pulse {
+  animation: f1-clock-pulse 0.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .f1-burst-piece,
+  .f1-burst-ring,
+  .f1-car-zoom {
+    display: none;
+  }
+  .f1-pop-in,
+  .f1-clock-pulse {
+    animation: none;
+  }
+}
+
+/* แผงคำตอบที่เหลือเลื่อนขึ้นจากล่าง */
+@keyframes f1-sheet-up {
+  from { transform: translateY(100%); opacity: 0.4; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.f1-sheet-up {
+  animation: f1-sheet-up 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .f1-sheet-up {
+    animation: none;
+  }
+}
