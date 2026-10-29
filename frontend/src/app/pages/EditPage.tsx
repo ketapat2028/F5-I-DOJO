@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { FolderOpen, Lock, Wrench } from "lucide-react";
 import { useNavigate } from "react-router";
 import { F1Header } from "../components/F1Header";
 import { Button } from "../components/ui/button";
@@ -81,7 +82,7 @@ function SideFields({ title, type, text, image, onType, onText, onImage, onUploa
             type="button"
             onClick={() => onType(t)}
             className={`f1-font-display rounded-sm border px-3 py-1 text-xs font-medium ${
-              type === t ? "border-[#DC0000] bg-[#DC0000] text-white" : "border-f1-line bg-white text-zinc-700"
+              type === t ? "border-f1-brand bg-f1-brand text-white" : "border-f1-line bg-white text-zinc-700"
             }`}
           >
             {TYPE_LABEL[t]}
@@ -122,10 +123,10 @@ function SideFields({ title, type, text, image, onType, onText, onImage, onUploa
               type="button"
               size="sm"
               disabled={uploading}
-              className="f1-font-display bg-[#DC0000] text-white hover:bg-[#b00000]"
+              className="f1-font-display bg-f1-brand text-white hover:bg-f1-brand-dark"
               onClick={() => fileRef.current?.click()}
             >
-              📁 เลือกรูปจากเครื่อง
+              <FolderOpen /> เลือกรูปจากเครื่อง
             </Button>
             <span className="max-w-48 truncate text-xs text-f1-mute" title={fileName ?? undefined}>
               {uploading
@@ -136,7 +137,7 @@ function SideFields({ title, type, text, image, onType, onText, onImage, onUploa
               <Button
                 variant="ghost"
                 size="sm"
-                className="text-[#DC0000] hover:bg-[#DC0000]/10 hover:text-[#B00000]"
+                className="text-f1-brand hover:bg-f1-brand/10 hover:text-f1-brand-dark"
                 onClick={() => {
                   setFileName(null);
                   onImage(undefined);
@@ -232,7 +233,9 @@ export function EditPage() {
       <div className="f1-paper-bg min-h-screen">
         <F1Header />
         <main className="mx-auto max-w-md space-y-3 p-6">
-          <h1 className="f1-font-display text-2xl font-bold text-f1-ink">🔒 EDIT MODE</h1>
+          <h1 className="f1-font-display flex items-center gap-2 text-2xl font-bold text-f1-ink">
+            <Lock className="size-6 text-f1-brand" /> EDIT MODE
+          </h1>
           <form
             className="space-y-3 rounded-sm border-2 border-f1-line bg-white/90 p-4"
             onSubmit={(e) => {
@@ -258,7 +261,7 @@ export function EditPage() {
               <Button
                 type="submit"
                 disabled={checkingSecret || !secretInput.trim()}
-                className="f1-font-display bg-[#DC0000] text-white hover:bg-[#b00000]"
+                className="f1-font-display bg-f1-brand text-white hover:bg-f1-brand-dark"
               >
                 {checkingSecret ? "กำลังตรวจ..." : "เข้าสู่ EDIT MODE"}
               </Button>
@@ -394,7 +397,9 @@ export function EditPage() {
     <div className="f1-paper-bg min-h-screen pb-16">
       <F1Header />
       <main className="mx-auto max-w-4xl space-y-4 p-6">
-        <h1 className="f1-font-display text-2xl font-bold text-f1-ink">🛠️ EDIT MODE • แก้ไขโจทย์</h1>
+        <h1 className="f1-font-display flex items-center gap-2 text-2xl font-bold text-f1-ink">
+          <Wrench className="size-6 text-f1-brand" /> EDIT MODE • แก้ไขโจทย์
+        </h1>
         {notice && (
           <p className="rounded-sm border border-f1-line bg-zinc-50 px-3 py-2 text-sm text-zinc-700">{notice}</p>
         )}
@@ -436,7 +441,7 @@ export function EditPage() {
               <Button
                 variant="ghost"
                 size="sm"
-                className="text-[#DC0000] hover:bg-[#DC0000]/10 hover:text-[#B00000]"
+                className="text-f1-brand hover:bg-f1-brand/10 hover:text-f1-brand-dark"
                 disabled={game.pairs.length <= MIN_PAIRS}
                 onClick={() => removePair(pair.id)}
               >
@@ -446,7 +451,7 @@ export function EditPage() {
 
             <div className="grid gap-3 md:grid-cols-2">
               <SideFields
-                title="📝 คำถาม (ซ้าย)"
+                title="คำถาม (ซ้าย)"
                 type={pair.promptType}
                 text={pair.promptText}
                 image={pair.promptImage}
@@ -464,7 +469,7 @@ export function EditPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-6 px-2 text-xs text-[#DC0000] hover:bg-[#DC0000]/10 hover:text-[#B00000]"
+                          className="h-6 px-2 text-xs text-f1-brand hover:bg-f1-brand/10 hover:text-f1-brand-dark"
                           onClick={() => removeAnswer(pair.id, answer.id)}
                         >
                           ลบคำตอบนี้
@@ -472,7 +477,7 @@ export function EditPage() {
                       )}
                     </div>
                     <SideFields
-                      title={aIdx === 0 ? "✅ คำตอบ (ขวา)" : `✅ คำตอบ (ขวา) #${aIdx + 1}`}
+                      title={aIdx === 0 ? "คำตอบ (ขวา)" : `คำตอบ (ขวา) #${aIdx + 1}`}
                       type={answer.type}
                       text={answer.text}
                       image={answer.image}
@@ -486,7 +491,7 @@ export function EditPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
+                  className="border-f1-brand bg-white text-f1-brand hover:bg-f1-brand/10"
                   onClick={() => addAnswer(pair.id)}
                 >
                   + เพิ่มคำตอบ
@@ -498,7 +503,7 @@ export function EditPage() {
 
         <Button
           variant="outline"
-          className="border-[#DC0000] bg-white text-[#DC0000] hover:bg-[#DC0000]/10"
+          className="border-f1-brand bg-white text-f1-brand hover:bg-f1-brand/10"
           onClick={addPair}
         >
           + เพิ่มคู่จับคู่
@@ -539,7 +544,7 @@ export function EditPage() {
           </Button>
           <Button
             disabled={saving}
-            className="f1-font-display bg-[#DC0000] text-white hover:bg-[#b00000]"
+            className="f1-font-display bg-f1-brand text-white hover:bg-f1-brand-dark"
             onClick={handleSave}
           >
             อัปโหลดแล้วไปเล่น

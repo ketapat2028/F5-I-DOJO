@@ -3,7 +3,9 @@ import type { AnswerOption, MatchPair, PromptType, Theme } from "../types/theme"
 // key เดิมตอนยังเก็บใน localStorage — เหลือไว้อ่านเพื่อย้ายข้อมูลขึ้น server เท่านั้น (readLegacyLocalGame)
 export const PAIRS_KEY = "f1-dojo-pairs-v4-click-match";
 const META_KEY = "idojo.f1.meta.v4";
-const DEFAULT_NAME = "DOJO · F1 RACING RED";
+const DEFAULT_NAME = "I-DOJO - PIT 5 DOMINO IMPACT";
+// ชื่อตัวอย่างเดิมที่ยังค้างใน DB — อ่านแล้วแทนด้วยชื่อใหม่ (บันทึกจาก editor ครั้งถัดไปจะเขียนชื่อใหม่ลง DB)
+const LEGACY_NAMES = ["DOJO · F1 RACING RED"];
 const DEFAULT_TIME = 300;
 
 // crypto.randomUUID ใช้ได้เฉพาะ secure context — เปิดผ่าน http://<IP ของ Pi> จะไม่มี
@@ -215,7 +217,7 @@ function fromPayload(data: unknown): Theme {
   const m = isObject(data) ? data : {};
   return {
     id: "f1-board",
-    name: typeof m.name === "string" && m.name ? m.name : DEFAULT_NAME,
+    name: typeof m.name === "string" && m.name && !LEGACY_NAMES.includes(m.name) ? m.name : DEFAULT_NAME,
     timeLimitSeconds: Number.isFinite(m.timeLimitSeconds) ? Math.max(0, m.timeLimitSeconds as number) : DEFAULT_TIME,
     pairs: recordsToPairs(data),
     createdAt: 0,
