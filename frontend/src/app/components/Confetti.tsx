@@ -1,6 +1,6 @@
 const COLORS = ["#1B4FA0", "#0B1F3A", "#5B8DEF", "#FFFFFF", "#22C55E"];
 
-const PIECES = Array.from({ length: 48 }, (_, i) => ({
+const PIECES = Array.from({ length: 28 }, (_, i) => ({
   left: (i * 37) % 100,
   delay: ((i * 53) % 100) / 100,
   duration: 2 + ((i * 29) % 100) / 60,

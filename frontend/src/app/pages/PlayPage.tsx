@@ -8,6 +8,9 @@ import type { MatchPair, PromptType, Theme } from "../types/theme";
 import { getGame, NoGameError } from "../utils/gameStore";
 import { forwardKeys, isEmbedded, listenPortal, sendResult, type PortalAck, type PortalResult } from "../utils/portalBridge";
 
+// ปุ่ม "ENTER / SPACEBAR" ของ portal (~90px) ไม่ขยายตาม root ของเรา → ต้องเป็น px คงที่ ห้ามใช้ rem (pb-28)
+const PORTAL_BOTTOM_GAP = "pb-[96px]";
+
 type Phase = "idle" | "running" | "finished" | "timeout";
 type Chip = { id: string; pairId: string; text: string; letter: string; type: PromptType; image?: string };
 type PlacedCard = { label: string; correct: boolean };
@@ -225,6 +228,15 @@ export function PlayPage() {
   const burstIdRef = useRef(0);
   // ตัวจัดการลากใช้ listener บน window — อ้างฟังก์ชันของ render ล่าสุดผ่าน ref
   const dropRef = useRef<(chipId: string, from: Spot, x: number, y: number, dragged: boolean) => void>(() => {});
+
+  // หน้าเล่นขยายทั้งหน้าตามขนาดจอ (ทีวี 55") · ?lite=1 = โหมดเบาสำหรับ Pi ที่ยังกระตุก — หน้า editor ไม่โดน
+  useEffect(() => {
+    const root = document.documentElement;
+    const lite = new URLSearchParams(window.location.search).get("lite") === "1";
+    root.classList.add("f1-play-scale");
+    if (lite) root.classList.add("f1-lite");
+    return () => root.classList.remove("f1-play-scale", "f1-lite");
+  }, []);
 
   useEffect(() => {
     setLoadError(null);
@@ -590,7 +602,7 @@ export function PlayPage() {
   function renderChip(chip: Chip, compact = false) {
     const hasImg = chip.type !== "text" && Boolean(chip.image);
     const textClass = hasImg
-      ? "line-clamp-2 text-[11px] sm:text-xs 2xl:text-sm"
+      ? "line-clamp-2 text-[0.6875rem] sm:text-xs 2xl:text-sm"
       : compact
         ? "line-clamp-3 text-xs sm:text-sm lg:text-base"
         : "line-clamp-3 text-sm sm:text-base lg:text-xl 2xl:text-2xl";
@@ -615,7 +627,7 @@ export function PlayPage() {
     return (
       <div
         className={cn(
-          "relative flex h-full w-full min-h-0 min-w-0 overflow-hidden rounded-xl border bg-white shadow-sm transition-all duration-300",
+          "relative flex h-full w-full min-h-0 min-w-0 overflow-hidden rounded-xl border bg-white shadow-sm transition-[border-color,box-shadow] duration-300",
           done ? "border-[#15803D] ring-2 ring-[#15803D]/40" : "border-f1-line",
         )}
       >
@@ -668,7 +680,7 @@ export function PlayPage() {
         data-answer-slot={key}
         onClick={(e) => handleSlotClick(ref, e)}
         className={cn(
-          "relative flex h-full min-h-0 min-w-0 items-center justify-center rounded-xl border-2 transition-all duration-200",
+          "relative flex h-full min-h-0 min-w-0 items-center justify-center rounded-xl border-2 transition-[border-color,background-color,box-shadow] duration-200",
           !chip && "border-dashed border-f1-line-strong bg-white/70",
           !chip && canPlaceHere && "cursor-pointer hover:border-f1-brand hover:bg-f1-brand/5",
           !chip && selectedChipId && canPlaceHere && "border-f1-brand bg-f1-brand/5",
@@ -677,7 +689,7 @@ export function PlayPage() {
           isHover && canPlaceHere && "scale-[1.03] border-dashed border-f1-brand bg-f1-brand/10 shadow-lg",
         )}
       >
-        <span className="f1-font-mono pointer-events-none absolute left-1 top-1 z-10 rounded bg-white/90 px-1 text-[10px] font-bold leading-4 text-f1-brand shadow-sm">
+        <span className="f1-font-mono pointer-events-none absolute left-1 top-1 z-10 rounded bg-white/90 px-1 text-[0.625rem] font-bold leading-4 text-f1-brand shadow-sm">
           {slotLabel(ref)}
         </span>
         {chip ? (
@@ -759,17 +771,18 @@ export function PlayPage() {
   return (
     // เต็มจอทุกอุปกรณ์ (h-dvh) — หน้าไม่เลื่อน ถ้าคำถามเยอะเกินจอ เลื่อนเฉพาะรายการคำถาม
     // ตอนถูกฝัง portal วางปุ่ม "ผ่านสถานี" ทับขอบล่าง ~90px จึงเว้นที่ไว้
-    <div className={cn("f1-paper-bg flex h-dvh flex-col overflow-hidden", embedded && "pb-28", drag && "cursor-grabbing select-none")}>
+    <div className={cn("f1-paper-bg flex h-dvh flex-col overflow-hidden", embedded && PORTAL_BOTTOM_GAP, drag && "cursor-grabbing select-none")}>
       <F1Header />
       {/* แถบเวลาเต็มความกว้างติดใต้ header — บาง 3px ไม่กินพื้นที่เล่น */}
       <div className="h-[3px] w-full shrink-0 bg-zinc-200">
         {remaining !== null && (
           <div
             className={cn(
-              "h-full transition-all duration-1000 ease-linear",
+              "h-full w-full origin-left transition-transform duration-1000 ease-linear",
               lowTime && phase === "running" ? "f1-timer-blink bg-f1-wrong" : "bg-f1-brand",
             )}
-            style={{ width: `${(remaining / limit) * 100}%` }}
+            // scaleX แทน width — ไม่ต้องคำนวณ layout ใหม่ทุกวินาที (ลื่นบน Pi 4)
+            style={{ transform: `scaleX(${remaining / limit})` }}
           />
         )}
       </div>
@@ -780,7 +793,7 @@ export function PlayPage() {
             <div className="truncate">
               <GameTitle name={game.name} />
             </div>
-            <p className="f1-font-display mt-0.5 truncate text-[11px] font-medium tracking-wide text-f1-mute sm:text-xs">
+            <p className="f1-font-display mt-0.5 truncate text-[0.6875rem] font-medium tracking-wide text-f1-mute sm:text-xs">
               <span className="hidden sm:inline">ถูก </span>
               <strong className="text-f1-ok-ink">
                 {lockedCorrect.size}/{total}
@@ -800,7 +813,7 @@ export function PlayPage() {
                 onClick={() => handleCheck(false)}
                 aria-label="สรุปผล"
                 className={cn(
-                  "f1-font-display transition-all",
+                  "f1-font-display transition-colors",
                   hasAnyPlaced ? "bg-f1-brand text-white hover:bg-f1-brand-dark" : "bg-zinc-200 text-zinc-500",
                 )}
               >
@@ -825,9 +838,9 @@ export function PlayPage() {
           <span className="text-center">คำตอบ (ขวา)<span className="hidden sm:inline"> — ลากหรือคลิกวางได้ทุกช่อง</span></span>
         </div>
 
-        {/* ทุกแถวสูงเท่ากันและแบ่งพื้นที่ที่เหลือของจอ · เตี้ยกว่า 6rem (มือถือ) / 4.5rem จะเลื่อนในกล่องนี้แทน */}
+        {/* ทุกแถวสูงเท่ากันและแบ่งพื้นที่ที่เหลือของจอ · เตี้ยกว่า 6rem (มือถือ) / 4.5rem / 1.75rem (จอใหญ่-ทีวี ให้เห็นครบทุกข้อ) จะเลื่อนในกล่องนี้แทน */}
         {/* เว้นขอบ px-3/py-3 ไว้ให้ปุ่ม ✕ และป้าย ✓/✗ ที่ยื่นออกนอกมุมการ์ด ไม่ถูก overflow ตัด */}
-        <div className="-mx-3 grid min-h-0 flex-1 auto-rows-[minmax(6rem,1fr)] gap-2 overflow-y-auto px-3 py-3 sm:auto-rows-[minmax(4.5rem,1fr)] sm:gap-3 fit:gap-2">
+        <div className="-mx-3 grid min-h-0 flex-1 auto-rows-[minmax(6rem,1fr)] gap-2 overflow-y-auto px-3 py-3 sm:auto-rows-[minmax(4.5rem,1fr)] sm:gap-3 lg:auto-rows-[minmax(1.75rem,1fr)] fit:gap-2">
           {game.pairs.map((pair, idx) => {
             const capacity = pair.answers.length;
             return (
@@ -855,7 +868,7 @@ export function PlayPage() {
               if (pool.length > 0 && !locked) setSheet({ target: null });
             }}
             className={cn(
-              "f1-font-display flex h-11 items-center gap-2 rounded-full border-2 px-4 text-sm font-bold shadow-md transition-all duration-200 sm:h-12 sm:px-5 sm:text-base",
+              "f1-font-display flex h-11 items-center gap-2 rounded-full border-2 px-4 text-sm font-bold shadow-md transition-[color,background-color,border-color,box-shadow,translate,scale] duration-200 sm:h-12 sm:px-5 sm:text-base",
               draggingFromSlot
                 ? "scale-105 border-dashed border-f1-brand bg-f1-brand/10 text-f1-brand"
                 : pool.length > 0 && !locked
@@ -908,7 +921,7 @@ export function PlayPage() {
           </div>
         </div>
 
-        <div className="f1-font-display hidden shrink-0 justify-between gap-6 overflow-hidden whitespace-nowrap text-[10px] text-f1-mute md:flex">
+        <div className="f1-font-display hidden shrink-0 justify-between gap-6 overflow-hidden whitespace-nowrap text-[0.625rem] text-f1-mute md:flex">
           <p>* กด คำตอบที่เหลือ แล้วลากการ์ดไปวาง หรือคลิกเลือกแล้วคลิกช่อง • เขียว = ถูก • แดง = ผิด</p>
           <p>I-DOJO - PIT 5 DOMINO IMPACT • LEFT QUESTION • RIGHT ANSWER • BLUE #1B4FA0 • WHITE • GREEN = CORRECT • RED = WRONG</p>
         </div>
@@ -930,7 +943,10 @@ export function PlayPage() {
 
       {showHelp && (
         <div
-          className="f1-backdrop-fade fixed inset-0 z-[65] flex items-center justify-center overflow-y-auto bg-black/60 p-4"
+          className={cn(
+            "f1-backdrop-fade fixed inset-0 z-[65] flex items-center justify-center overflow-y-auto bg-black/60 p-4",
+            embedded && PORTAL_BOTTOM_GAP,
+          )}
           onClick={() => setShowHelp(false)}
         >
           <div
@@ -963,8 +979,8 @@ export function PlayPage() {
           />
           <div
             className={cn(
-              "fixed inset-x-0 z-[70] mx-auto max-w-6xl px-2 transition-all duration-200 ease-out",
-              embedded ? "bottom-28" : "bottom-0",
+              "fixed inset-x-0 z-[70] mx-auto max-w-6xl px-2 transition-[translate,opacity] duration-200 ease-out",
+              embedded ? "bottom-[96px]" : "bottom-0",
               drag && "pointer-events-none translate-y-full opacity-0",
             )}
           >
@@ -1000,7 +1016,7 @@ export function PlayPage() {
                     data-sheet-card=""
                     onPointerDown={(e) => startPointer(e, chip.id, "bank")}
                     className={cn(
-                      "f1-pop-in h-20 cursor-grab touch-none select-none rounded-lg border-2 border-f1-line bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-f1-brand hover:shadow-md active:cursor-grabbing lg:h-24",
+                      "f1-pop-in h-20 cursor-grab touch-none select-none rounded-lg border-2 border-f1-line bg-white shadow-sm transition-[translate,border-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-f1-brand hover:shadow-md active:cursor-grabbing lg:h-24",
                       selectedChipId === chip.id && "border-f1-brand ring-4 ring-f1-brand/30",
                     )}
                   >
@@ -1018,11 +1034,12 @@ export function PlayPage() {
       {modalData && tier && (
         <div
           className={cn(
-            "f1-backdrop-fade fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/60 p-4",
-            embedded && "pb-28",
+            "f1-backdrop-fade fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4",
+            embedded && PORTAL_BOTTOM_GAP,
           )}
         >
-          <div className="f1-font-display f1-modal-pop relative my-auto w-full max-w-lg rounded-sm border-4 border-f1-brand bg-white p-6 text-f1-ink">
+          {/* กล่องสูงไม่เกินพื้นที่ (ไม่ล้นลงใต้ปุ่ม portal) — เลื่อนเฉพาะรายการผลรายข้อ */}
+          <div className="f1-font-display f1-modal-pop relative flex max-h-full w-full max-w-lg flex-col rounded-sm border-4 border-f1-brand bg-white p-6 text-f1-ink [&>*]:shrink-0">
             <button
               type="button"
               onClick={() => setModalData(null)}
@@ -1072,26 +1089,26 @@ export function PlayPage() {
 
             <div className="f1-font-mono mt-4 grid grid-cols-3 gap-2 text-center text-sm">
               <div className="rounded-sm bg-zinc-100 p-2">
-                <p className="text-[10px] text-f1-brand">TIME USED</p>
+                <p className="text-[0.625rem] text-f1-brand">TIME USED</p>
                 <p className="text-lg font-bold">{formatTime(modalData.timeUsedSeconds)}</p>
               </div>
               <div className="rounded-sm bg-zinc-100 p-2">
-                <p className="text-[10px] text-f1-brand">CORRECT</p>
+                <p className="text-[0.625rem] text-f1-brand">CORRECT</p>
                 <p className="text-lg font-bold">
                   {modalData.score}/{modalData.total}
                 </p>
               </div>
               <div className="rounded-sm bg-zinc-100 p-2">
-                <p className="text-[10px] text-f1-brand">ACCURACY</p>
+                <p className="text-[0.625rem] text-f1-brand">ACCURACY</p>
                 <p className="text-lg font-bold">{modalData.accuracy}%</p>
-                <p className={cn("text-[10px]", modalData.mistakes > 0 ? "text-f1-wrong" : "text-f1-mute")}>
+                <p className={cn("text-[0.625rem]", modalData.mistakes > 0 ? "text-f1-wrong" : "text-f1-mute")}>
                   วางผิด {modalData.mistakes} ครั้ง
                 </p>
               </div>
             </div>
 
             <p className="mt-4 text-center font-bold text-f1-brand">ผลตรวจทีละข้อ</p>
-            <div className="mt-2 max-h-[40vh] space-y-3 overflow-y-auto pr-1">
+            <div className="mt-2 min-h-0 space-y-3 overflow-y-auto pr-1" style={{ flexShrink: 1 }}>
               {game.pairs.map((pair) => {
                 const w = modalData.wrong.find((x) => x.pairId === pair.id);
                 const hasWrongCard = w?.placedCards.some((c) => !c.correct) ?? false;
