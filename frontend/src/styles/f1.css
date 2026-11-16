@@ -312,16 +312,16 @@
   }
 }
 
-/* แผงคำตอบที่เหลือเลื่อนขึ้นจากล่าง */
-@keyframes f1-sheet-up {
-  from { transform: translateY(100%); opacity: 0.4; }
-  to { transform: translateY(0); opacity: 1; }
+/* แผงคำตอบที่เหลือเลื่อนเข้าจากขวา (ทับเฉพาะฝั่งช่องคำตอบ) */
+@keyframes f1-sheet-left {
+  from { transform: translateX(100%); opacity: 0.4; }
+  to { transform: translateX(0); opacity: 1; }
 }
-.f1-sheet-up {
-  animation: f1-sheet-up 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+.f1-sheet-left {
+  animation: f1-sheet-left 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.1);
 }
 @media (prefers-reduced-motion: reduce) {
-  .f1-sheet-up {
+  .f1-sheet-left {
     animation: none;
   }
 }
@@ -336,7 +336,7 @@ html.f1-play-scale {
 /* โหมดเบา ?lite=1 สำหรับ Pi ที่ยังกระตุก — เหลือแค่ fade สั้น ๆ ไม่มีแอนิเมชันวน ไม่มีแฟลช/confetti */
 html.f1-lite .f1-pop-in,
 html.f1-lite .f1-modal-pop,
-html.f1-lite .f1-sheet-up {
+html.f1-lite .f1-sheet-left {
   animation: f1-backdrop-fade 0.2s ease-out backwards;
 }
 html.f1-lite .f1-glow,

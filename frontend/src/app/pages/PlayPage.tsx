@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { ArrowLeftRight, Check, Circle, CircleCheck, CircleX, Eye, Flag, Info, Layers, Loader2, Plus, Trophy, X } from "lucide-react";
 import { Confetti } from "../components/Confetti";
-import { F1Header } from "../components/F1Header";
+import { AutoHideF1Header, F1Header } from "../components/F1Header";
 import { Button } from "../components/ui/button";
 import { cn } from "../components/ui/utils";
 import type { MatchPair, PromptType, Theme } from "../types/theme";
@@ -98,8 +98,8 @@ function GameTitle({ name }: { name: string }) {
   // "I-DOJO - PIT 5 DOMINO IMPACT" → ส่วนหลัง " - " เป็นสีน้ำเงิน
   const m = name.match(/^(.*?\S)\s+-\s+(.+)$/);
   return (
-    <h1 className="f1-font-display text-lg font-bold leading-tight text-f1-ink sm:text-2xl">
-      <Flag className="mr-2 inline size-5 align-[-0.1em] text-f1-brand sm:size-6" />
+    <h1 className="f1-font-display text-base font-bold leading-tight text-f1-ink sm:text-xl">
+      <Flag className="mr-1.5 inline size-4 align-[-0.1em] text-f1-brand sm:size-5" />
       {m ? `${m[1]} - ` : name}
       {m && <span className="text-f1-brand">{m[2]}</span>}
     </h1>
@@ -117,7 +117,7 @@ function RaceClock({ remaining, elapsed, limit, running }: { remaining: number |
   return (
     <div
       className={cn(
-        "flex h-11 shrink-0 items-center gap-2 rounded-full border-2 pl-1.5 pr-4 shadow-md transition-colors duration-500 sm:h-14 sm:gap-3 sm:pr-5",
+        "flex h-10 shrink-0 items-center gap-2 rounded-full border-2 pl-1 pr-3 shadow-md transition-colors duration-500 sm:h-12 sm:gap-2.5 sm:pr-4",
         low && running ? "border-f1-wrong shadow-[0_0_24px_rgba(220,0,0,0.6)]" : "border-f1-brand",
         critical && running && "f1-clock-pulse",
       )}
@@ -125,7 +125,7 @@ function RaceClock({ remaining, elapsed, limit, running }: { remaining: number |
       role="timer"
       aria-label={remaining !== null ? "เวลาที่เหลือ" : "เวลาที่ใช้"}
     >
-      <svg viewBox="0 0 36 36" className="size-8 shrink-0 -rotate-90 sm:size-11">
+      <svg viewBox="0 0 36 36" className="size-7 shrink-0 -rotate-90 sm:size-9">
         <circle cx="18" cy="18" r={R} fill="none" strokeWidth="4" className="stroke-white/15" />
         <circle
           cx="18"
@@ -144,7 +144,7 @@ function RaceClock({ remaining, elapsed, limit, running }: { remaining: number |
       </svg>
       <span
         className={cn(
-          "f1-font-mono text-2xl font-bold tabular-nums leading-none sm:text-4xl lg:text-5xl",
+          "f1-font-mono text-xl font-bold tabular-nums leading-none sm:text-3xl lg:text-4xl",
           low && running ? "f1-timer-blink text-f1-wrong-bright" : "text-white",
         )}
       >
@@ -210,6 +210,9 @@ export function PlayPage() {
   const [showHelp, setShowHelp] = useState(false);
   // แผง "คำตอบที่เหลือ" (เลื่อนขึ้นจากล่าง) · target = เปิดจากการคลิกช่องว่าง → คลิกการ์ดแล้ววางลงช่องนั้นเลย
   const [sheet, setSheet] = useState<{ target: SlotRef | null } | null>(null);
+  const [sheetBox, setSheetBox] = useState<{ top: number; bottom: number } | null>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   // ตรวจคำตอบ = บอกแค่ถูก/ผิด · ต้องกดปุ่มเฉลยแยกต่างหากถึงจะเห็นคำตอบที่ถูกจริง
   const [showAnswerKey, setShowAnswerKey] = useState(false);
 
@@ -236,6 +239,13 @@ export function PlayPage() {
     root.classList.add("f1-play-scale");
     if (lite) root.classList.add("f1-lite");
     return () => root.classList.remove("f1-play-scale", "f1-lite");
+  }, []);
+
+  // ปิดเมนูคลิกขวา (และเมนูกดค้างบนจอสัมผัส) ในหน้าเล่น — กันผู้เล่นเปิดเมนู/บันทึกรูปเฉลย · หน้า editor ไม่โดน
+  useEffect(() => {
+    const block = (e: MouseEvent) => e.preventDefault();
+    window.addEventListener("contextmenu", block);
+    return () => window.removeEventListener("contextmenu", block);
   }, []);
 
   useEffect(() => {
@@ -296,9 +306,32 @@ export function PlayPage() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setSheet(null);
     };
+    // แตะนอกแผง (เช่นฝั่งคำถาม) = ปิด · ไม่มีฉากมืดบังคำถามแล้ว จึงใช้ตัวนี้แทน — ปุ่มคำตอบที่เหลือจัดการเปิด/ปิดเอง
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (sheetRef.current?.contains(t) || t?.closest("[data-bank]")) return;
+      setSheet(null);
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onDown);
+    };
   }, [sheet]);
+
+  // แผงคำตอบเลื่อนเข้าจากขวา — สูงเท่ากล่องรายการคำถาม (ไม่บังนาฬิกา/ปุ่มด้านล่าง) และเริ่มที่กึ่งกลางจอ ไม่บังคำถามฝั่งซ้าย
+  const sheetOpen = sheet !== null;
+  useLayoutEffect(() => {
+    if (!sheetOpen) return;
+    const measure = () => {
+      const r = listRef.current?.getBoundingClientRect();
+      if (r) setSheetBox({ top: r.top, bottom: window.innerHeight - r.bottom });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [sheetOpen]);
 
   // วางถูกครบทุกข้อ = เข้าเส้นชัยทันที ไม่ต้องกดตรวจ
   useEffect(() => {
@@ -429,26 +462,26 @@ export function PlayPage() {
     return "bank";
   }
 
-  // วางการ์ดลงช่อง/คลัง · ช่องที่มีการ์ดถูกอยู่แล้ววางทับไม่ได้ · ช่องที่มีการ์ดผิด → สลับ (การ์ดเดิมไปอยู่ที่ต้นทาง)
-  function placeChip(chipId: string, target: Spot, at?: { x: number; y: number }) {
-    if (locked) return;
+  // วางการ์ดลงช่อง/คลัง · คืน true เมื่อวางได้จริง · ช่องที่มีการ์ดถูกอยู่แล้ววางทับไม่ได้ · ช่องที่มีการ์ดผิด → สลับ (การ์ดเดิมไปอยู่ที่ต้นทาง)
+  function placeChip(chipId: string, target: Spot, at?: { x: number; y: number }): boolean {
+    if (locked) return false;
     const from = locate(chipId);
-    if (from !== "bank" && isCorrectAt(chipId, from.pairId)) return;
+    if (from !== "bank" && isCorrectAt(chipId, from.pairId)) return false;
     const next = Object.fromEntries(Object.entries(slots).map(([k, v]) => [k, [...v]]));
     if (target === "bank") {
-      if (from === "bank") return;
+      if (from === "bank") return false;
       next[from.pairId][from.index] = null;
       setSlots(next);
       setSelectedChipId(null);
       if (at) spark(at.x, at.y, null);
-      return;
+      return true;
     }
     const occupant = next[target.pairId]?.[target.index] ?? null;
-    if (occupant === chipId) return;
+    if (occupant === chipId) return false;
     const point = at ?? slotCenter(target);
     if (occupant && isCorrectAt(occupant, target.pairId)) {
       spark(point.x, point.y, false);
-      return;
+      return false;
     }
     if (from !== "bank") next[from.pairId][from.index] = occupant; // สลับ (ถ้าช่องปลายทางว่าง = ล้างต้นทาง)
     next[target.pairId][target.index] = chipId;
@@ -460,6 +493,7 @@ export function PlayPage() {
     setLastDrop((prev) => ({ key: slotKey(target), ok, n: (prev?.n ?? 0) + 1 }));
     spark(point.x, point.y, ok);
     startIfIdle();
+    return true;
   }
 
   // คลิกการ์ด (ไม่ได้ลาก): มีการ์ดเลือกไว้แล้วและคลิกการ์ดผิดในช่อง → วางทับ · ไม่งั้นสลับการเลือก
@@ -501,7 +535,7 @@ export function PlayPage() {
       handleCardClick(chipId, from, x, y);
       return;
     }
-    // ลากจากแผงแล้ว = ไม่ผูกกับช่องที่คลิกเปิดแผงอีก (แผงกลับขึ้นมาเองเพื่อลากใบถัดไป)
+    // ลากจากแผงแล้ว = ไม่ผูกกับช่องที่คลิกเปิดแผงอีก · ปล่อยนอกช่อง/วางไม่ได้ → แผงกลับขึ้นมาให้ลองใหม่
     if (sheet?.target) setSheet({ target: null });
     const el = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-answer-slot],[data-bank]");
     if (!el) return; // ปล่อยนอกช่อง = การ์ดกลับที่เดิม
@@ -511,7 +545,8 @@ export function PlayPage() {
     }
     const [pairId, index] = (el.dataset.answerSlot ?? "").split(":");
     if (!slots[pairId] || !(Number(index) in slots[pairId])) return;
-    placeChip(chipId, { pairId, index: Number(index) }, { x, y });
+    // วางลงช่องสำเร็จ = ปิดแผง (กด "คำตอบที่เหลือ" เพื่อเปิดใหม่)
+    if (placeChip(chipId, { pairId, index: Number(index) }, { x, y })) setSheet(null);
   };
 
   // ลากด้วย pointer events — ใช้ได้ทั้งเมาส์และนิ้ว (การ์ดตั้ง touch-action: none ไว้ ไม่ให้หน้าเลื่อนตอนลาก)
@@ -772,7 +807,8 @@ export function PlayPage() {
     // เต็มจอทุกอุปกรณ์ (h-dvh) — หน้าไม่เลื่อน ถ้าคำถามเยอะเกินจอ เลื่อนเฉพาะรายการคำถาม
     // ตอนถูกฝัง portal วางปุ่ม "ผ่านสถานี" ทับขอบล่าง ~90px จึงเว้นที่ไว้
     <div className={cn("f1-paper-bg flex h-dvh flex-col overflow-hidden", embedded && PORTAL_BOTTOM_GAP, drag && "cursor-grabbing select-none")}>
-      <F1Header />
+      {/* navbar ซ่อนไว้ · ชี้เมาส์มุมขวาบนเพื่อแสดง */}
+      <AutoHideF1Header />
       {/* แถบเวลาเต็มความกว้างติดใต้ header — บาง 3px ไม่กินพื้นที่เล่น */}
       <div className="h-[3px] w-full shrink-0 bg-zinc-200">
         {remaining !== null && (
@@ -840,7 +876,7 @@ export function PlayPage() {
 
         {/* ทุกแถวสูงเท่ากันและแบ่งพื้นที่ที่เหลือของจอ · เตี้ยกว่า 6rem (มือถือ) / 4.5rem / 1.75rem (จอใหญ่-ทีวี ให้เห็นครบทุกข้อ) จะเลื่อนในกล่องนี้แทน */}
         {/* เว้นขอบ px-3/py-3 ไว้ให้ปุ่ม ✕ และป้าย ✓/✗ ที่ยื่นออกนอกมุมการ์ด ไม่ถูก overflow ตัด */}
-        <div className="-mx-3 grid min-h-0 flex-1 auto-rows-[minmax(6rem,1fr)] gap-2 overflow-y-auto px-3 py-3 sm:auto-rows-[minmax(4.5rem,1fr)] sm:gap-3 lg:auto-rows-[minmax(1.75rem,1fr)] fit:gap-2">
+        <div ref={listRef} className="-mx-3 grid min-h-0 flex-1 auto-rows-[minmax(6rem,1fr)] gap-2 overflow-y-auto px-3 py-3 sm:auto-rows-[minmax(4.5rem,1fr)] sm:gap-3 lg:auto-rows-[minmax(1.75rem,1fr)] fit:gap-2">
           {game.pairs.map((pair, idx) => {
             const capacity = pair.answers.length;
             return (
@@ -920,11 +956,6 @@ export function PlayPage() {
             )}
           </div>
         </div>
-
-        <div className="f1-font-display hidden shrink-0 justify-between gap-6 overflow-hidden whitespace-nowrap text-[0.625rem] text-f1-mute md:flex">
-          <p>* กด คำตอบที่เหลือ แล้วลากการ์ดไปวาง หรือคลิกเลือกแล้วคลิกช่อง • เขียว = ถูก • แดง = ผิด</p>
-          <p>I-DOJO - PIT 5 DOMINO IMPACT • LEFT QUESTION • RIGHT ANSWER • BLUE #1B4FA0 • WHITE • GREEN = CORRECT • RED = WRONG</p>
-        </div>
       </main>
 
       {/* การ์ดที่ลอยตามเมาส์/นิ้วตอนลาก */}
@@ -967,26 +998,19 @@ export function PlayPage() {
         </div>
       )}
 
-      {/* แผงคำตอบที่เหลือ — เลื่อนขึ้นจากล่าง · ตอนลากการ์ดแผงหลบลงไปให้เห็นทุกช่อง แล้วกลับขึ้นมาเองหลังวาง */}
+      {/* แผงคำตอบที่เหลือ — เลื่อนเข้าจากขวา ทับเฉพาะคอลัมน์ช่องคำตอบ (เริ่มกึ่งกลางจอ) คำถามฝั่งซ้ายเห็นตลอด ไม่มีฉากมืด
+          ตอนลากการ์ดแผงหลบไปทางขวาให้เห็นทุกช่อง แล้วกลับมาเองหลังวาง */}
       {sheet && pool.length > 0 && (
-        <>
-          <div
-            className={cn(
-              "f1-backdrop-fade fixed inset-0 z-[68] bg-black/25 transition-opacity duration-200",
-              drag && "pointer-events-none opacity-0",
-            )}
-            onClick={() => setSheet(null)}
-          />
-          <div
-            className={cn(
-              "fixed inset-x-0 z-[70] mx-auto max-w-6xl px-2 transition-[translate,opacity] duration-200 ease-out",
-              embedded ? "bottom-[96px]" : "bottom-0",
-              drag && "pointer-events-none translate-y-full opacity-0",
-            )}
-          >
-            <div className="f1-sheet-up f1-font-display rounded-t-2xl border-x border-t-4 border-f1-brand bg-white px-3 pb-3 pt-2 text-f1-ink shadow-[0_-12px_40px_rgba(11,31,58,0.25)] sm:px-5">
-              <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-f1-line" />
-              <div className="mb-2 flex items-center gap-2">
+        <div
+          ref={sheetRef}
+          className={cn(
+            "fixed left-1/2 right-0 z-[70] flex flex-col py-1 pl-2 transition-[translate,opacity] duration-200 ease-out",
+            drag && "pointer-events-none translate-x-full opacity-0",
+          )}
+          style={sheetBox ? { top: sheetBox.top, bottom: sheetBox.bottom } : { top: 0, bottom: embedded ? 96 : 0 }}
+        >
+          <div className="f1-sheet-left f1-font-display flex min-h-0 flex-1 flex-col rounded-l-2xl border-y border-l-4 border-f1-brand bg-white px-3 pb-3 pt-3 text-f1-ink shadow-[-12px_0_40px_rgba(11,31,58,0.25)] sm:px-5">
+            <div className="mb-2 flex shrink-0 items-center gap-2">
                 <Layers className="size-5 shrink-0 text-f1-brand" />
                 <h3 className="min-w-0 flex-1 truncate text-sm font-bold sm:text-base">
                   {sheet.target ? (
@@ -1009,7 +1033,7 @@ export function PlayPage() {
                   <X className="size-5" strokeWidth={3} />
                 </button>
               </div>
-              <div className="grid max-h-[42dvh] grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-2 overflow-y-auto p-1 lg:grid-cols-[repeat(auto-fill,minmax(9rem,1fr))]">
+              <div className="grid min-h-0 flex-1 content-start grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-2 overflow-y-auto p-1 lg:grid-cols-[repeat(auto-fill,minmax(9rem,1fr))]">
                 {pool.map((chip) => (
                   <div
                     key={chip.id}
@@ -1026,7 +1050,6 @@ export function PlayPage() {
               </div>
             </div>
           </div>
-        </>
       )}
 
       {modalData?.allCorrect && <Confetti />}

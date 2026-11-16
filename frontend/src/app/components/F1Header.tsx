@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Link } from "react-router";
+import { cn } from "./ui/utils";
 
 export function F1Header() {
   return (
@@ -22,5 +24,53 @@ export function F1Header() {
         </nav>
       </div>
     </header>
+  );
+}
+
+// หน้าเล่น: ซ่อน navbar ไว้ให้พื้นที่เล่นเต็มจอ · เลื่อนลงมาเมื่อชี้เมาส์ที่มุมขวาบนของจอ (แถบบาง ๆ ชิดขอบ ไม่ทับปุ่มวิธีเล่น)
+// อยู่บน navbar ต่อได้ เลื่อนออกแล้วหายไปเอง · จอสัมผัส: แตะมุมขวาบน = แสดง แล้วหายเองหลังไม่กี่วินาที
+// ลอยทับด้านบน (fixed) ไม่ดันเลย์เอาต์เกม
+const HIDE_DELAY_MOUSE_MS = 400;
+const HIDE_DELAY_TOUCH_MS = 4000;
+
+export function AutoHideF1Header() {
+  const [open, setOpen] = useState(false);
+  const timerRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => () => window.clearTimeout(timerRef.current), []);
+
+  function show() {
+    window.clearTimeout(timerRef.current);
+    setOpen(true);
+  }
+  function hideSoon(e?: ReactPointerEvent) {
+    window.clearTimeout(timerRef.current);
+    const delay = e?.pointerType === "touch" ? HIDE_DELAY_TOUCH_MS : HIDE_DELAY_MOUSE_MS;
+    timerRef.current = window.setTimeout(() => setOpen(false), delay);
+  }
+
+  return (
+    <>
+      {/* จุดชี้มุมขวาบน — ใช้ px ไม่ขยายตาม f1-play-scale (ขอบจอชนเมาส์อยู่แล้ว ไม่ต้องใหญ่) */}
+      <div
+        aria-hidden
+        className="fixed right-0 top-0 z-[90] h-[14px] w-[260px]"
+        onPointerEnter={show}
+        onPointerDown={show}
+        onPointerLeave={hideSoon}
+      />
+      <div
+        className={cn(
+          "fixed inset-x-0 top-0 z-[90] shadow-lg transition-[translate] duration-200 ease-out",
+          open ? "translate-y-0" : "pointer-events-none -translate-y-full",
+        )}
+        onPointerEnter={show}
+        onPointerLeave={hideSoon}
+        onFocus={show}
+        onBlur={() => hideSoon()}
+      >
+        <F1Header />
+      </div>
+    </>
   );
 }
